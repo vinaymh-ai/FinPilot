@@ -1,0 +1,25 @@
+# docker compose up --build            → app on http://localhost:8000 (SQLite in a volume)
+# docker compose --profile postgres up  → same app backed by PostgreSQL
+services:
+  app:
+    build: .
+    ports: ["8000:8000"]
+    env_file: [.env]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/finpilot.db}
+    volumes: ["finpilot-data:/data"]
+    restart: unless-stopped
+
+  postgres:
+    profiles: ["postgres"]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: finpilot
+      POSTGRES_PASSWORD: finpilot
+      POSTGRES_DB: finpilot
+    volumes: ["pg-data:/var/lib/postgresql/data"]
+    ports: ["5432:5432"]
+
+volumes:
+  finpilot-data:
+  pg-data:
