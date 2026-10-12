@@ -15,7 +15,7 @@ from finpilot.services.synthetic import generate
 log = logging.getLogger(__name__)
 
 DEMO_PERSONA = "young_professional"
-DEMO_SEED = 23
+DEMO_SEED = 7
 
 
 def seed_demo(

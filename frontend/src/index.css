@@ -1,0 +1,102 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --canvas: #f6f7fb;
+  --surface: #ffffff;
+  --surface-2: #f1f4f9;
+  --line: #e4e8ef;
+  --ink: #0f172a;
+  --muted: #64748b;
+  --brand: #059669;
+  --brand-2: #4f46e5;
+  --grid: #e8ecf2;
+  color-scheme: light;
+}
+.dark {
+  --canvas: #070b14;
+  --surface: #0c1322;
+  --surface-2: #111a2d;
+  --line: #1c2740;
+  --ink: #e5eaf3;
+  --muted: #8b9ab3;
+  --brand: #34d399;
+  --brand-2: #818cf8;
+  --grid: #172036;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-brand: var(--brand);
+  --color-brand-2: var(--brand-2);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  background: var(--canvas);
+  color: var(--ink);
+  font-feature-settings: "cv11", "ss01", "tnum";
+  -webkit-font-smoothing: antialiased;
+}
+.num {
+  font-variant-numeric: tabular-nums;
+}
+.glow {
+  background:
+    radial-gradient(1200px 400px at 10% -10%, color-mix(in oklab, var(--brand) 14%, transparent), transparent 60%),
+    radial-gradient(900px 400px at 90% -20%, color-mix(in oklab, var(--brand-2) 16%, transparent), transparent 60%);
+}
+.text-gradient {
+  background: linear-gradient(90deg, var(--brand), var(--brand-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 8px;
+  border: 2px solid var(--canvas);
+}
+.prose-fp p {
+  margin: 0.35rem 0;
+}
+.prose-fp ul {
+  list-style: disc;
+  padding-left: 1.2rem;
+  margin: 0.35rem 0;
+}
+.prose-fp li {
+  margin: 0.15rem 0;
+}
+.prose-fp strong {
+  font-weight: 650;
+}
+.prose-fp em {
+  color: var(--muted);
+}
+@keyframes shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--surface-2) 0%, var(--line) 50%, var(--surface-2) 100%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s infinite linear;
+}

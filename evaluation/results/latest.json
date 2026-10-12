@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-12 10:18",
+  "generated_at": "2026-10-12 10:36",
   "mode": "deterministic (no LLM)",
   "seeds": [
     1,
@@ -7,26 +7,26 @@
     3
   ],
   "categorization": {
-    "transactions": 5613,
+    "transactions": 5631,
     "datasets": 9,
     "ablation": {
       "1_lexicon_only": {
         "accuracy": 0.7903,
-        "macro_f1": 0.8254,
+        "macro_f1": 0.8267,
         "accuracy_known_merchants": 1.0,
-        "accuracy_long_tail": 0.0384
+        "accuracy_long_tail": 0.0383
       },
       "2_plus_keywords": {
-        "accuracy": 0.9332,
-        "macro_f1": 0.9015,
+        "accuracy": 0.9339,
+        "macro_f1": 0.9026,
         "accuracy_known_merchants": 1.0,
-        "accuracy_long_tail": 0.6936
+        "accuracy_long_tail": 0.6971
       },
       "3_plus_patterns (deterministic)": {
-        "accuracy": 0.9332,
-        "macro_f1": 0.9015,
+        "accuracy": 0.9339,
+        "macro_f1": 0.9026,
         "accuracy_known_merchants": 1.0,
-        "accuracy_long_tail": 0.6936,
+        "accuracy_long_tail": 0.6971,
         "per_category": {
           "cash": {
             "precision": 1.0,
@@ -39,12 +39,12 @@
           },
           "dining": {
             "precision": 1.0,
-            "recall": 0.7125,
-            "f1": 0.8321,
-            "tp": 399,
+            "recall": 0.714,
+            "f1": 0.8332,
+            "tp": 402,
             "fp": 0,
             "fn": 161,
-            "support": 560
+            "support": 563
           },
           "education": {
             "precision": 1.0,
@@ -57,12 +57,12 @@
           },
           "entertainment": {
             "precision": 1.0,
-            "recall": 0.9205,
-            "f1": 0.9586,
-            "tp": 139,
+            "recall": 0.9216,
+            "f1": 0.9592,
+            "tp": 141,
             "fp": 0,
             "fn": 12,
-            "support": 151
+            "support": 153
           },
           "fees": {
             "precision": 1.0,
@@ -77,10 +77,10 @@
             "precision": 1.0,
             "recall": 1.0,
             "f1": 1.0,
-            "tp": 1112,
+            "tp": 1125,
             "fp": 0,
             "fn": 0,
-            "support": 1112
+            "support": 1125
           },
           "gifts_donations": {
             "precision": 1.0,
@@ -93,21 +93,21 @@
           },
           "groceries": {
             "precision": 1.0,
-            "recall": 0.9443,
-            "f1": 0.9714,
-            "tp": 882,
+            "recall": 0.9451,
+            "f1": 0.9718,
+            "tp": 878,
             "fp": 0,
-            "fn": 52,
-            "support": 934
+            "fn": 51,
+            "support": 929
           },
           "health": {
             "precision": 1.0,
             "recall": 1.0,
             "f1": 1.0,
-            "tp": 155,
+            "tp": 156,
             "fp": 0,
             "fn": 0,
-            "support": 155
+            "support": 156
           },
           "income": {
             "precision": 1.0,
@@ -155,13 +155,13 @@
             "support": 47
           },
           "personal_care": {
-            "precision": 0.4222,
-            "recall": 0.6032,
-            "f1": 0.4967,
-            "tp": 38,
-            "fp": 52,
-            "fn": 25,
-            "support": 63
+            "precision": 0.4333,
+            "recall": 0.629,
+            "f1": 0.5132,
+            "tp": 39,
+            "fp": 51,
+            "fn": 23,
+            "support": 62
           },
           "rent": {
             "precision": 1.0,
@@ -174,12 +174,12 @@
           },
           "shopping": {
             "precision": 1.0,
-            "recall": 0.8727,
-            "f1": 0.932,
-            "tp": 377,
+            "recall": 0.8724,
+            "f1": 0.9318,
+            "tp": 376,
             "fp": 0,
             "fn": 55,
-            "support": 432
+            "support": 431
           },
           "subscriptions": {
             "precision": 1.0,
@@ -191,22 +191,22 @@
             "support": 321
           },
           "transfers": {
-            "precision": 0.8118,
+            "precision": 0.8217,
             "recall": 1.0,
-            "f1": 0.8961,
-            "tp": 207,
-            "fp": 48,
+            "f1": 0.9021,
+            "tp": 212,
+            "fp": 46,
             "fn": 0,
-            "support": 207
+            "support": 212
           },
           "transport": {
             "precision": 1.0,
             "recall": 0.9691,
             "f1": 0.9843,
-            "tp": 940,
+            "tp": 941,
             "fp": 0,
             "fn": 30,
-            "support": 970
+            "support": 971
           },
           "travel": {
             "precision": 0.6667,
@@ -241,7 +241,7 @@
           {
             "true": "groceries",
             "pred": "personal_care",
-            "count": 52
+            "count": 51
           },
           {
             "true": "transport",
@@ -251,7 +251,7 @@
           {
             "true": "personal_care",
             "pred": "transfers",
-            "count": 25
+            "count": 23
           },
           {
             "true": "other",
@@ -273,13 +273,13 @@
     },
     "baseline_majority_class": {
       "predicts": "food_delivery",
-      "accuracy": 0.1981
+      "accuracy": 0.1998
     },
     "long_tail_share": 0.2181,
     "source_mix": {
       "rule": 0.7819,
-      "keyword": 0.1673,
-      "fallback": 0.0508
+      "keyword": 0.1675,
+      "fallback": 0.0506
     }
   },
   "detectors": {
@@ -299,10 +299,10 @@
       "fp": 1,
       "fn": 0,
       "recall_by_type": {
-        "large_new_merchant": 1.0,
+        "fee": 1.0,
         "duplicate_charge": 1.0,
-        "large_purchase": 1.0,
-        "fee": 1.0
+        "large_new_merchant": 1.0,
+        "large_purchase": 1.0
       }
     },
     "unused_membership_detection": {
@@ -312,58 +312,58 @@
   },
   "forecast": {
     "origins": 42,
-    "seconds": 3.1,
+    "seconds": 3.3,
     "metric": "mean |predicted \u2212 actual net cash-flow| as % of monthly income",
     "horizons": {
       "30": {
-        "finpilot_p50": 28.44,
-        "naive_last_30d": 66.13,
-        "mean_last_90d": 55.29,
-        "finpilot_p50_median": 13.26,
+        "finpilot_p50": 28.9,
+        "naive_last_30d": 65.6,
+        "mean_last_90d": 54.74,
+        "finpilot_p50_median": 14.71,
         "naive_last_30d_median": 63.2,
-        "p10_p90_coverage": 0.714,
+        "p10_p90_coverage": 0.667,
         "n": 42
       },
       "60": {
-        "finpilot_p50": 40.97,
-        "naive_last_30d": 104.52,
-        "mean_last_90d": 88.93,
-        "finpilot_p50_median": 18.34,
+        "finpilot_p50": 41.57,
+        "naive_last_30d": 103.55,
+        "mean_last_90d": 87.97,
+        "finpilot_p50_median": 19.24,
         "naive_last_30d_median": 73.66,
-        "p10_p90_coverage": 0.75,
+        "p10_p90_coverage": 0.722,
         "n": 36
       },
       "90": {
-        "finpilot_p50": 51.86,
-        "naive_last_30d": 109.08,
-        "mean_last_90d": 95.94,
-        "finpilot_p50_median": 22.5,
+        "finpilot_p50": 53.11,
+        "naive_last_30d": 107.53,
+        "mean_last_90d": 94.35,
+        "finpilot_p50_median": 28.45,
         "naive_last_30d_median": 76.07,
-        "p10_p90_coverage": 0.733,
+        "p10_p90_coverage": 0.633,
         "n": 30
       }
     },
     "error_30d_by_persona": {
-      "young_professional": 14.1,
+      "young_professional": 15.5,
       "family": 13.5,
       "freelancer": 57.7
     },
     "category_wape_30d": {
       "food_delivery": {
-        "finpilot": 0.261,
-        "naive_last_30d": 0.292
+        "finpilot": 0.258,
+        "naive_last_30d": 0.29
       },
       "groceries": {
-        "finpilot": 0.31,
-        "naive_last_30d": 0.33
+        "finpilot": 0.306,
+        "naive_last_30d": 0.327
       },
       "dining": {
-        "finpilot": 0.493,
-        "naive_last_30d": 0.586
+        "finpilot": 0.492,
+        "naive_last_30d": 0.584
       },
       "transport": {
-        "finpilot": 0.331,
-        "naive_last_30d": 0.393
+        "finpilot": 0.328,
+        "naive_last_30d": 0.391
       },
       "shopping": {
         "finpilot": 0.788,
@@ -375,8 +375,8 @@
       }
     },
     "category_wape_30d_overall": {
-      "finpilot": 0.523,
-      "naive_last_30d": 0.574
+      "finpilot": 0.522,
+      "naive_last_30d": 0.573
     }
   },
   "simulation": {
@@ -392,5 +392,5 @@
     "mode": "deterministic intent router (LLM-free fallback)"
   },
   "llm_note": "Deterministic run: no LLM calls were made. Run `python -m evaluation.run_eval --llm` with MESH_API_KEY set to measure the LLM long-tail stage (row 4) on the same data.",
-  "runtime_seconds": 16.8
+  "runtime_seconds": 17.8
 }

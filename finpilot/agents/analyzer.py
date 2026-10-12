@@ -706,6 +706,48 @@ class AnalyzerAgent(BaseAgent):
             )
         return out
 
+    # ------------------------------------------------------------------ profile
+    def _rules_profile(self, report: AnalysisReport) -> list[str]:
+        """Deterministic behaviour profile: four specific observations computed from the user's data."""
+        cur = report.currency
+        out: list[str] = []
+        disc = [t for t in report.category_trends if t["category"] in DISCRETIONARY and t["last_30d"] > 0]
+        if disc:
+            top = max(disc, key=lambda t: t["last_30d"])
+            spend = report.windows.get("last_30d_spend") or 0
+            share = f" — {top['last_30d'] / spend * 100:.0f}% of all spending" if spend else ""
+            out.append(
+                f"{top['label']} is your biggest discretionary category: {_fmt(top['last_30d'], cur)} in the "
+                f"last 30 days{share}."
+            )
+        wk = report.behavior.get("weekday_spend_90d") or {}
+        if wk:
+            peak = max(wk.items(), key=lambda kv: kv[1])
+            ws = report.behavior.get("weekend_share_pct", 0)
+            habit = "weekend-heavy" if ws >= 40 else "spread across the week"
+            out.append(
+                f"Your discretionary spending is {habit} ({ws:.0f}% on Sat/Sun); {peak[0]} is your "
+                f"heaviest day ({_fmt(peak[1], cur)} over 90 days)."
+            )
+        fixed = sum(s.monthly_cost for s in report.subscriptions)
+        if report.impulse.get("late_night_count"):
+            out.append(
+                f"{report.impulse['late_night_count']} late-night purchases in the last 30 days — impulse-style "
+                f"buys average {_fmt(report.impulse.get('monthly_avg_90d', 0), cur)}/month."
+            )
+        if fixed:
+            inc = report.windows.get("avg_income_30d") or 0
+            share = f" ({fixed / inc * 100:.1f}% of income)" if inc else ""
+            out.append(
+                f"{len(report.subscriptions)} subscriptions quietly cost {_fmt(fixed, cur)}/month{share}."
+            )
+        tops = report.behavior.get("top_merchants_30d") or []
+        if len(out) < 4 and tops:
+            out.append(
+                f"Most money went to {tops[0]['merchant']} this month ({_fmt(tops[0]['amount'], cur)})."
+            )
+        return out[:4]
+
     # ------------------------------------------------------------------ LLM narrative
     def _profile(self, report: AnalysisReport) -> tuple[list[str], str]:
         facts = {
@@ -723,7 +765,7 @@ class AnalyzerAgent(BaseAgent):
             },
             "findings": [{"title": f.title, "detail": f.detail} for f in report.findings[:8]],
         }
-        fallback = [f.title for f in report.findings if f.kind != "subscription_inventory"][:4]
+        fallback = self._rules_profile(report)
         if not self.llm_available:
             return fallback, "rules"
         self.system_prompt = SYSTEM_PROMPT.format(currency=report.currency)

@@ -9,8 +9,9 @@ openai>=1.40
 # --- Agent orchestration ---
 langgraph>=0.2
 
-# --- Data / persistence ---
+# --- Data / persistence (SQLite by default; PostgreSQL via DATABASE_URL=postgresql+psycopg://...) ---
 sqlalchemy>=2.0
+psycopg[binary]>=3.2
 pydantic>=2.7
 pydantic-settings>=2.3
 numpy>=1.26

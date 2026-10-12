@@ -307,13 +307,13 @@ def _young_professional() -> PersonaSpec:
             },
             {
                 "name": "Emergency fund (6 months)",
-                "target_amount": 350_000,
+                "target_amount": 400_000,
                 "saved_amount": 110_000,
                 "months_ahead": 5.6,
                 "priority": 2,
             },
         ],
-        last_month_trend={"food_delivery": 1.45},
+        last_month_trend={"food_delivery": 1.5},
         stop_merchants_months_before_end={"Zomato": 3},
     )
 

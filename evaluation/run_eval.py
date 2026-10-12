@@ -489,6 +489,20 @@ def render_markdown(r: dict[str, Any]) -> str:
     ]
     if r.get("llm_note"):
         lines += ["## LLM layer", "", r["llm_note"], ""]
+    lines += [
+        "## Caveats (read before quoting these numbers)",
+        "",
+        "- All data is synthetic. Known-merchant accuracy is measured against labels drawn from the same merchant "
+        "knowledge the categorizer uses, so it mainly tests robustness to noisy bank descriptions (UPI refs, POS "
+        "masks, order codes). The **long-tail column is the honest generalisation test**.",
+        "- Injected anomalies (₹55k late-night electronics, duplicate charges, fees, a large first-time payee) are "
+        "realistic but clear-cut; subtle fraud is out of scope.",
+        "- Forecast coverage below the nominal 80% means the P10–P90 band is still somewhat too narrow, mostly on "
+        "the freelancer persona whose income is irregular.",
+        "- Category-level 30-day spend is inherently noisy (a handful of lumpy purchases per month); both FinPilot "
+        "and the naive baseline have high WAPE there.",
+        "",
+    ]
     return "\n".join(lines)
 
 

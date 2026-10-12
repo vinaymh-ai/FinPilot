@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import datetime as dt
 import re
-import statistics
 from collections import Counter, defaultdict
 from functools import cached_property
 from typing import Any
@@ -400,8 +399,9 @@ class FinanceToolkit:
         dining = self.get_spending(category="dining", period="last_90_days")["per_month_rate"]
         trips = [x for x in trips if x >= 2500]  # ignore bus tickets / day outings
         if trips:
-            est = statistics.median(trips) * 1.3  # flights/stay + ~30% on-trip spending
-            basis = f"median of {len(trips)} past trip(s) ({self.money(statistics.median(trips))}) + 30% on-trip spend"
+            # a trip "like your last real one": the biggest past trip, plus ~30% for on-trip spending
+            est = max(trips) * 1.3
+            basis = f"your biggest past trip ({self.money(max(trips))}) + 30% for on-trip spending"
         else:
             est = max(25000.0, dining * 3)
             basis = "no past trips found; assumed a modest domestic trip"
