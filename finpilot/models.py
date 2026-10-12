@@ -1,0 +1,298 @@
+"""ORM models.
+
+Money is stored as NUMERIC(14,2) and surfaced as float for analytics. Debits are negative,
+credits positive. Every analytical artefact (insight, forecast, recommendation, digest) points
+back to the `AgentRun` that produced it, which is what makes the decision trail auditable.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+from typing import Any
+
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    Time,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from finpilot.db import Base
+
+Money = Numeric(14, 2, asdecimal=False)
+
+
+class TimestampMixin:
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class User(TimestampMixin, Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), default="Demo User")
+    email: Mapped[str | None] = mapped_column(String(255))
+    currency: Mapped[str] = mapped_column(String(8), default="INR")
+    # Anchor balance: the account balance as of `balance_as_of`. Forecasts start from here.
+    current_balance: Mapped[float] = mapped_column(Money, default=0.0)
+    balance_as_of: Mapped[dt.date | None] = mapped_column(Date)
+    safety_buffer: Mapped[float | None] = mapped_column(Money)
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(64))
+    digest_email: Mapped[str | None] = mapped_column(String(255))
+    digest_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class ImportBatch(TimestampMixin, Base):
+    __tablename__ = "import_batches"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    source: Mapped[str] = mapped_column(String(32))  # csv | manual | demo
+    filename: Mapped[str | None] = mapped_column(String(255))
+    rows_total: Mapped[int] = mapped_column(Integer, default=0)
+    rows_imported: Mapped[int] = mapped_column(Integer, default=0)
+    rows_duplicate: Mapped[int] = mapped_column(Integer, default=0)
+    rows_invalid: Mapped[int] = mapped_column(Integer, default=0)
+    errors: Mapped[list[str] | None] = mapped_column(JSON)
+
+
+class Transaction(TimestampMixin, Base):
+    __tablename__ = "transactions"
+    __table_args__ = (
+        UniqueConstraint("user_id", "fingerprint", name="uq_txn_fingerprint"),
+        Index("ix_txn_user_date", "user_id", "date"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    batch_id: Mapped[int | None] = mapped_column(ForeignKey("import_batches.id", ondelete="SET NULL"))
+    date: Mapped[dt.date] = mapped_column(Date)
+    time: Mapped[dt.time | None] = mapped_column(Time)
+    description: Mapped[str] = mapped_column(String(512))
+    merchant: Mapped[str] = mapped_column(String(255), index=True)
+    amount: Mapped[float] = mapped_column(Money)
+    account: Mapped[str | None] = mapped_column(String(64))
+    fingerprint: Mapped[str] = mapped_column(String(64))
+
+    category: Mapped[str | None] = mapped_column(String(48), index=True)
+    category_source: Mapped[str | None] = mapped_column(
+        String(24)
+    )  # memory|rule|keyword|pattern|llm|user|fallback
+    category_confidence: Mapped[float | None] = mapped_column(Float)
+    category_reason: Mapped[str | None] = mapped_column(String(512))
+    tags: Mapped[list[str] | None] = mapped_column(JSON)  # e.g. ["impulse", "late_night"]
+    is_recurring: Mapped[bool] = mapped_column(Boolean, default=False)
+    recurring_id: Mapped[int | None] = mapped_column(ForeignKey("recurring_series.id", ondelete="SET NULL"))
+    is_anomaly: Mapped[bool] = mapped_column(Boolean, default=False)
+    anomaly_reason: Mapped[str | None] = mapped_column(String(512))
+    notes: Mapped[str | None] = mapped_column(Text)
+
+
+class MerchantMemory(TimestampMixin, Base):
+    """User corrections. The categorizer consults this first, so the system learns from edits."""
+
+    __tablename__ = "merchant_memory"
+    __table_args__ = (UniqueConstraint("user_id", "merchant_key", name="uq_merchant_memory"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    merchant_key: Mapped[str] = mapped_column(String(255))
+    category: Mapped[str] = mapped_column(String(48))
+    hits: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class RecurringSeries(TimestampMixin, Base):
+    __tablename__ = "recurring_series"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    merchant: Mapped[str] = mapped_column(String(255))
+    category: Mapped[str] = mapped_column(String(48))
+    kind: Mapped[str] = mapped_column(
+        String(24)
+    )  # subscription|bill|rent|emi|income|insurance|investment|other
+    cadence: Mapped[str] = mapped_column(String(16))  # weekly|monthly|quarterly|yearly
+    interval_days: Mapped[float] = mapped_column(Float)
+    typical_amount: Mapped[float] = mapped_column(Money)
+    last_amount: Mapped[float] = mapped_column(Money)
+    first_date: Mapped[dt.date] = mapped_column(Date)
+    last_date: Mapped[dt.date] = mapped_column(Date)
+    next_expected: Mapped[dt.date] = mapped_column(Date)
+    occurrences: Mapped[int] = mapped_column(Integer)
+    regularity: Mapped[float] = mapped_column(Float)  # 0..1, 1 = perfectly regular
+    price_change_pct: Mapped[float | None] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(String(16), default="active")  # active|lapsed|cancelled
+    cancelled_on: Mapped[dt.date | None] = mapped_column(Date)
+    usage: Mapped[str] = mapped_column(String(16), default="unknown")  # unknown|used|rarely_used (user-set)
+    usage_signal: Mapped[str | None] = mapped_column(String(255))  # data-derived evidence of (non-)usage
+
+
+class Goal(TimestampMixin, Base):
+    __tablename__ = "goals"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    target_amount: Mapped[float] = mapped_column(Money)
+    saved_amount: Mapped[float] = mapped_column(Money, default=0.0)
+    deadline: Mapped[dt.date] = mapped_column(Date)
+    priority: Mapped[int] = mapped_column(Integer, default=1)  # 1 = highest
+    status: Mapped[str] = mapped_column(String(16), default="active")  # active|achieved|archived
+    history: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)  # progress snapshots per run
+
+
+class AgentRun(Base):
+    __tablename__ = "agent_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    trigger: Mapped[str] = mapped_column(String(24))  # manual|upload|schedule|chat|digest|api
+    graph: Mapped[str] = mapped_column(String(48), default="pipeline")
+    status: Mapped[str] = mapped_column(String(16), default="running")  # running|succeeded|failed
+    started_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    summary: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    analysis: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON
+    )  # analyzer snapshot (trends, subs, behaviour)
+    error: Mapped[str | None] = mapped_column(Text)
+
+    steps: Mapped[list[AgentStep]] = relationship(
+        back_populates="run", cascade="all, delete-orphan", order_by="AgentStep.id"
+    )
+
+
+class AgentStep(Base):
+    __tablename__ = "agent_steps"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True)
+    agent: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(16))  # succeeded|failed|skipped
+    started_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    duration_ms: Mapped[int] = mapped_column(Integer)
+    summary: Mapped[str | None] = mapped_column(Text)
+    details: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    llm_calls: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text)
+
+    run: Mapped[AgentRun] = relationship(back_populates="steps")
+
+
+class LLMCall(TimestampMixin, Base):
+    __tablename__ = "llm_calls"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("agent_runs.id", ondelete="SET NULL"), index=True)
+    agent: Mapped[str] = mapped_column(String(32))
+    provider: Mapped[str] = mapped_column(String(32))
+    model: Mapped[str] = mapped_column(String(128))
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    cached: Mapped[bool] = mapped_column(Boolean, default=False)
+    success: Mapped[bool] = mapped_column(Boolean, default=True)
+    error: Mapped[str | None] = mapped_column(Text)
+
+
+class LLMCache(Base):
+    __tablename__ = "llm_cache"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    model: Mapped[str] = mapped_column(String(128))
+    response: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Insight(TimestampMixin, Base):
+    __tablename__ = "insights"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(48))
+    severity: Mapped[str] = mapped_column(String(16))  # info|warning|critical|positive
+    title: Mapped[str] = mapped_column(String(255))
+    detail: Mapped[str] = mapped_column(Text)
+    metrics: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    transaction_ids: Mapped[list[int] | None] = mapped_column(JSON)
+
+
+class Forecast(TimestampMixin, Base):
+    __tablename__ = "forecasts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True)
+    horizon_days: Mapped[int] = mapped_column(Integer)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
+class Recommendation(TimestampMixin, Base):
+    __tablename__ = "recommendations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[int] = mapped_column(ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(48))
+    title: Mapped[str] = mapped_column(String(255))
+    message: Mapped[str] = mapped_column(Text)
+    action: Mapped[str] = mapped_column(String(255))
+    monthly_impact: Mapped[float] = mapped_column(Money, default=0.0)
+    priority: Mapped[float] = mapped_column(Float, default=0.0)
+    urgency: Mapped[str] = mapped_column(String(16), default="normal")  # low|normal|high
+    status: Mapped[str] = mapped_column(String(16), default="new")  # new|accepted|dismissed|done
+    # --- Decision trail -------------------------------------------------------------------
+    trigger: Mapped[str] = mapped_column(String(64))  # which signal fired (pattern / forecast / goal)
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSON)  # the numbers + transaction ids behind it
+    reasoning: Mapped[list[str]] = mapped_column(JSON)  # ordered reasoning steps
+    generated_by: Mapped[str] = mapped_column(String(128))  # "rules" or "<provider>:<model>"
+    grounded: Mapped[bool] = mapped_column(Boolean, default=True)  # passed the numeric grounding check
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)  # stable id across runs
+    updated_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), onupdate=func.now())
+
+
+class Digest(TimestampMixin, Base):
+    __tablename__ = "digests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("agent_runs.id", ondelete="SET NULL"))
+    trigger: Mapped[str] = mapped_column(String(24))  # schedule|manual
+    subject: Mapped[str] = mapped_column(String(255))
+    headline: Mapped[str] = mapped_column(Text)
+    action: Mapped[str] = mapped_column(Text)
+    body_markdown: Mapped[str] = mapped_column(Text)
+    deliveries: Mapped[dict[str, Any] | None] = mapped_column(JSON)  # channel -> {status, detail}
+    recommendation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("recommendations.id", ondelete="SET NULL")
+    )
+
+
+class ChatMessage(TimestampMixin, Base):
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    session_id: Mapped[str] = mapped_column(String(64), index=True)
+    role: Mapped[str] = mapped_column(String(16))  # user|assistant
+    content: Mapped[str] = mapped_column(Text)
+    trace: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)  # tool calls with args/results
+
+
+class AppSetting(Base):
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[Any] = mapped_column(JSON)

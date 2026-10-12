@@ -1,0 +1,396 @@
+{
+  "generated_at": "2026-10-12 10:18",
+  "mode": "deterministic (no LLM)",
+  "seeds": [
+    1,
+    2,
+    3
+  ],
+  "categorization": {
+    "transactions": 5613,
+    "datasets": 9,
+    "ablation": {
+      "1_lexicon_only": {
+        "accuracy": 0.7903,
+        "macro_f1": 0.8254,
+        "accuracy_known_merchants": 1.0,
+        "accuracy_long_tail": 0.0384
+      },
+      "2_plus_keywords": {
+        "accuracy": 0.9332,
+        "macro_f1": 0.9015,
+        "accuracy_known_merchants": 1.0,
+        "accuracy_long_tail": 0.6936
+      },
+      "3_plus_patterns (deterministic)": {
+        "accuracy": 0.9332,
+        "macro_f1": 0.9015,
+        "accuracy_known_merchants": 1.0,
+        "accuracy_long_tail": 0.6936,
+        "per_category": {
+          "cash": {
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "tp": 77,
+            "fp": 0,
+            "fn": 0,
+            "support": 77
+          },
+          "dining": {
+            "precision": 1.0,
+            "recall": 0.7125,
+            "f1": 0.8321,
+            "tp": 399,
+            "fp": 0,
+            "fn": 161,
+            "support": 560
+          },
+          "education": {
+            "precision": 1.0,
+            "recall": 0.6909,
+            "f1": 0.8172,
+            "tp": 38,
+            "fp": 0,
+            "fn": 17,
+            "support": 55
+          },
+          "entertainment": {
+            "precision": 1.0,
+            "recall": 0.9205,
+            "f1": 0.9586,
+            "tp": 139,
+            "fp": 0,
+            "fn": 12,
+            "support": 151
+          },
+          "fees": {
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "tp": 9,
+            "fp": 0,
+            "fn": 0,
+            "support": 9
+          },
+          "food_delivery": {
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "tp": 1112,
+            "fp": 0,
+            "fn": 0,
+            "support": 1112
+          },
+          "gifts_donations": {
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "tp": 37,
+            "fp": 0,
+            "fn": 0,
+            "support": 37
+          },
+          "groceries": {
+            "precision": 1.0,
+            "recall": 0.9443,
+            "f1": 0.9714,
+            "tp": 882,
+            "fp": 0,
+            "fn": 52,
+            "support": 934
+          },
+          "health": {
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "tp": 155,
+            "fp": 0,
+            "fn": 0,
+            "support": 155
+          },
+          "income": {
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "tp": 83,
+            "fp": 0,
+            "fn": 0,
+            "support": 83
+          },
+          "insurance": {
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "tp": 12,
+            "fp": 0,
+            "fn": 0,
+            "support": 12
+          },
+          "investments": {
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "tp": 48,
+            "fp": 0,
+            "fn": 0,
+            "support": 48
+          },
+          "loans": {
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "tp": 48,
+            "fp": 0,
+            "fn": 0,
+            "support": 48
+          },
+          "other": {
+            "precision": 0.0842,
+            "recall": 0.5106,
+            "f1": 0.1446,
+            "tp": 24,
+            "fp": 261,
+            "fn": 23,
+            "support": 47
+          },
+          "personal_care": {
+            "precision": 0.4222,
+            "recall": 0.6032,
+            "f1": 0.4967,
+            "tp": 38,
+            "fp": 52,
+            "fn": 25,
+            "support": 63
+          },
+          "rent": {
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "tp": 48,
+            "fp": 0,
+            "fn": 0,
+            "support": 48
+          },
+          "shopping": {
+            "precision": 1.0,
+            "recall": 0.8727,
+            "f1": 0.932,
+            "tp": 377,
+            "fp": 0,
+            "fn": 55,
+            "support": 432
+          },
+          "subscriptions": {
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "tp": 321,
+            "fp": 0,
+            "fn": 0,
+            "support": 321
+          },
+          "transfers": {
+            "precision": 0.8118,
+            "recall": 1.0,
+            "f1": 0.8961,
+            "tp": 207,
+            "fp": 48,
+            "fn": 0,
+            "support": 207
+          },
+          "transport": {
+            "precision": 1.0,
+            "recall": 0.9691,
+            "f1": 0.9843,
+            "tp": 940,
+            "fp": 0,
+            "fn": 30,
+            "support": 970
+          },
+          "travel": {
+            "precision": 0.6667,
+            "recall": 1.0,
+            "f1": 0.8,
+            "tp": 28,
+            "fp": 14,
+            "fn": 0,
+            "support": 28
+          },
+          "utilities": {
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "tp": 216,
+            "fp": 0,
+            "fn": 0,
+            "support": 216
+          }
+        },
+        "top_confusions": [
+          {
+            "true": "dining",
+            "pred": "other",
+            "count": 159
+          },
+          {
+            "true": "shopping",
+            "pred": "other",
+            "count": 55
+          },
+          {
+            "true": "groceries",
+            "pred": "personal_care",
+            "count": 52
+          },
+          {
+            "true": "transport",
+            "pred": "other",
+            "count": 30
+          },
+          {
+            "true": "personal_care",
+            "pred": "transfers",
+            "count": 25
+          },
+          {
+            "true": "other",
+            "pred": "transfers",
+            "count": 23
+          },
+          {
+            "true": "education",
+            "pred": "other",
+            "count": 17
+          },
+          {
+            "true": "entertainment",
+            "pred": "travel",
+            "count": 12
+          }
+        ]
+      }
+    },
+    "baseline_majority_class": {
+      "predicts": "food_delivery",
+      "accuracy": 0.1981
+    },
+    "long_tail_share": 0.2181,
+    "source_mix": {
+      "rule": 0.7819,
+      "keyword": 0.1673,
+      "fallback": 0.0508
+    }
+  },
+  "detectors": {
+    "recurring_series": {
+      "precision": 1.0,
+      "recall": 0.973,
+      "f1": 0.9863,
+      "tp": 108,
+      "fp": 0,
+      "fn": 3
+    },
+    "anomalies": {
+      "precision": 0.973,
+      "recall": 1.0,
+      "f1": 0.9863,
+      "tp": 36,
+      "fp": 1,
+      "fn": 0,
+      "recall_by_type": {
+        "large_new_merchant": 1.0,
+        "duplicate_charge": 1.0,
+        "large_purchase": 1.0,
+        "fee": 1.0
+      }
+    },
+    "unused_membership_detection": {
+      "datasets": 3,
+      "exact_match": 3
+    }
+  },
+  "forecast": {
+    "origins": 42,
+    "seconds": 3.1,
+    "metric": "mean |predicted \u2212 actual net cash-flow| as % of monthly income",
+    "horizons": {
+      "30": {
+        "finpilot_p50": 28.44,
+        "naive_last_30d": 66.13,
+        "mean_last_90d": 55.29,
+        "finpilot_p50_median": 13.26,
+        "naive_last_30d_median": 63.2,
+        "p10_p90_coverage": 0.714,
+        "n": 42
+      },
+      "60": {
+        "finpilot_p50": 40.97,
+        "naive_last_30d": 104.52,
+        "mean_last_90d": 88.93,
+        "finpilot_p50_median": 18.34,
+        "naive_last_30d_median": 73.66,
+        "p10_p90_coverage": 0.75,
+        "n": 36
+      },
+      "90": {
+        "finpilot_p50": 51.86,
+        "naive_last_30d": 109.08,
+        "mean_last_90d": 95.94,
+        "finpilot_p50_median": 22.5,
+        "naive_last_30d_median": 76.07,
+        "p10_p90_coverage": 0.733,
+        "n": 30
+      }
+    },
+    "error_30d_by_persona": {
+      "young_professional": 14.1,
+      "family": 13.5,
+      "freelancer": 57.7
+    },
+    "category_wape_30d": {
+      "food_delivery": {
+        "finpilot": 0.261,
+        "naive_last_30d": 0.292
+      },
+      "groceries": {
+        "finpilot": 0.31,
+        "naive_last_30d": 0.33
+      },
+      "dining": {
+        "finpilot": 0.493,
+        "naive_last_30d": 0.586
+      },
+      "transport": {
+        "finpilot": 0.331,
+        "naive_last_30d": 0.393
+      },
+      "shopping": {
+        "finpilot": 0.788,
+        "naive_last_30d": 0.837
+      },
+      "entertainment": {
+        "finpilot": 0.675,
+        "naive_last_30d": 0.833
+      }
+    },
+    "category_wape_30d_overall": {
+      "finpilot": 0.523,
+      "naive_last_30d": 0.574
+    }
+  },
+  "simulation": {
+    "scenarios": 36,
+    "exact_delta_rate": 1.0,
+    "verdict_monotonic_datasets": "6/6",
+    "note": "Scenario and baseline share random draws (common random numbers), so the end-balance delta equals the purchase exactly and bigger purchases never get a milder verdict."
+  },
+  "chat": {
+    "cases": 20,
+    "accuracy": 1.0,
+    "failures": [],
+    "mode": "deterministic intent router (LLM-free fallback)"
+  },
+  "llm_note": "Deterministic run: no LLM calls were made. Run `python -m evaluation.run_eval --llm` with MESH_API_KEY set to measure the LLM long-tail stage (row 4) on the same data.",
+  "runtime_seconds": 16.8
+}
