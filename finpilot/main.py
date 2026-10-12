@@ -13,34 +13,44 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from finpilot import __version__
-from finpilot.api.deps import require_token
-from finpilot.api.routes import agents, core, decisions, planning, settings, transactions
+from finpilot.api.deps import current_principal, require_token
+from finpilot.api.routes import agents, auth, core, decisions, observability, planning, settings, transactions
 from finpilot.config import get_settings
 from finpilot.db import init_db, session_scope
 from finpilot.decisions.jev import get_jev
 from finpilot.llm.client import get_router
 from finpilot.logging_config import configure_logging
 from finpilot.models import Transaction
+from finpilot.observability.middleware import RequestContextMiddleware
+from finpilot.observability.tracing import configure_langsmith
 from finpilot.services import repository as repo
-from finpilot.services.scheduler import scheduler
+from finpilot.services.scheduler import run_maintenance, scheduler
 
 log = logging.getLogger("finpilot")
 
 
 def bootstrap() -> None:
-    """Create tables, restore runtime LLM overrides, seed + analyse the demo account on first boot."""
+    """Create tables, restore runtime LLM overrides, seed + analyse the demo account on first boot.
+
+    With accounts enabled there is no shared user to seed: every visitor gets a private demo
+    account from "Try the demo", and a database from single-user mode is taken over by the first
+    account that signs up.
+    """
     s = get_settings()
     init_db()
+    seed = s.seed_demo_data and not s.auth_enabled
     with session_scope() as db:
         get_router().set_overrides(repo.get_setting(db, "llm_overrides", {}) or {})
         get_jev().set_overrides(repo.get_setting(db, "jev_overrides", {}) or {})
-        repo.get_or_create_user(db)
+        if not s.auth_enabled:
+            repo.get_or_create_user(db)
         empty = db.query(Transaction).first() is None
-        if empty and s.seed_demo_data:
+        if empty and seed:
             from finpilot.services.seed import seed_demo
 
             seed_demo(db)
-    if empty and s.seed_demo_data:
+    run_maintenance()
+    if empty and seed:
         from finpilot.agents.coordinator import Coordinator
 
         try:
@@ -52,17 +62,20 @@ def bootstrap() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     s = get_settings()
-    configure_logging(s.log_level, s.log_json)
+    log_path = configure_logging(s.log_level, s.log_json, s.log_file, s.log_file_max_mb, s.log_file_backups)
+    configure_langsmith(s)
     bootstrap()
     if s.scheduler_enabled:
         with session_scope() as db:
             cron = repo.get_setting(db, "digest_cron")
         scheduler.start(digest_cron=cron)
     log.info(
-        "FinPilot %s ready (decisions: %s; LLM: %s)",
+        "FinPilot %s ready (decisions: %s; LLM: %s; accounts: %s; log file: %s)",
         __version__,
         get_jev().describe(),
         get_router().describe("advisor"),
+        "on" if s.auth_enabled else "off (single-user)",
+        log_path or "off",
     )
     yield
     scheduler.shutdown()
@@ -94,15 +107,32 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["X-Request-ID"],
     )
+    # outermost: every request gets an id, an access-log line and security headers
+    app.add_middleware(RequestContextMiddleware)
 
     @app.exception_handler(ValueError)
     async def value_error_handler(_: Request, exc: ValueError) -> JSONResponse:
         return JSONResponse(status_code=422, content={"detail": str(exc)})
 
-    protected = [Depends(require_token)]
+    @app.exception_handler(Exception)
+    async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
+        # Logged with its traceback by RequestContextMiddleware; the id lets a user report it.
+        rid = getattr(request.state, "request_id", None)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": {"message": "Something went wrong on our side.", "request_id": rid}},
+            headers={"X-Request-ID": rid} if rid else None,
+        )
+
+    protected = [Depends(require_token), Depends(current_principal)]
     app.include_router(core.public, prefix="/api", tags=["system"])
+    app.include_router(auth.public, prefix="/api", tags=["auth"])
+    app.include_router(observability.public, prefix="/api", tags=["observability"])
     for r, tag in (
+        (auth.router, "auth"),
+        (observability.router, "observability"),
         (core.router, "system"),
         (transactions.router, "transactions"),
         (planning.router, "planning"),

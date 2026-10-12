@@ -40,6 +40,7 @@ from finpilot.decisions.jev import JevClient, get_jev
 from finpilot.domain.recurring import detect_recurring
 from finpilot.llm.client import LLMRouter, get_router, run_context, step_call_log
 from finpilot.models import AgentRun, AgentStep, Digest, Forecast, Insight, Recommendation, Transaction
+from finpilot.observability.context import user_id_var
 from finpilot.services import notifier
 from finpilot.services import repository as repo
 from finpilot.services.goal_types import ensure_goal_types
@@ -113,6 +114,7 @@ class Coordinator:
         if not lock.acquire(timeout=120):
             raise RuntimeError("another pipeline run is in progress for this user")
         session = new_session()
+        user_token = user_id_var.set(user_id)  # tags logs, model calls and decisions with the user
         try:
             run = AgentRun(user_id=user_id, trigger=trigger, graph="pipeline", status="running")
             session.add(run)
@@ -126,8 +128,17 @@ class Coordinator:
                 "recategorize": recategorize,
                 "errors": [],
             }
+            log.info("pipeline run %s started (%s)", run.id, trigger, extra={"event": "pipeline_start"})
             with run_context(run.id):
-                final = graph.invoke(state)
+                # LangSmith (when enabled) traces each node as a span under this named run.
+                final = graph.invoke(
+                    state,
+                    config={
+                        "run_name": f"finpilot.pipeline.{trigger}",
+                        "tags": ["finpilot", "pipeline", trigger],
+                        "metadata": {"user_id": user_id, "run_id": run.id, "trigger": trigger},
+                    },
+                )
             run = session.get(AgentRun, run.id)
             assert run is not None
             run.finished_at = dt.datetime.now(dt.UTC)
@@ -135,6 +146,12 @@ class Coordinator:
             run.error = "; ".join(final.get("errors") or []) or None
             run.summary = self._summary(final)
             session.commit()
+            log.info(
+                "pipeline run %s %s",
+                run.id,
+                run.status,
+                extra={"event": "pipeline_end", "status": run.status, "errors": final.get("errors") or None},
+            )
             return {
                 "run_id": run.id,
                 "status": run.status,
@@ -146,6 +163,7 @@ class Coordinator:
             raise
         finally:
             session.close()
+            user_id_var.reset(user_token)
             lock.release()
 
     def build_graph(self, session: Session):

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from finpilot.agents.coordinator import Coordinator
-from finpilot.api.deps import current_user_id, get_db
+from finpilot.api.deps import current_user_id, get_db, require_admin
 from finpilot.api.routes.decisions import jev_state
 from finpilot.config import get_settings
 from finpilot.llm.client import AGENTS, LLMError, LLMRouter, get_router
@@ -99,7 +99,7 @@ def update_profile(
     return get_settings_view(uid, db)
 
 
-@router.put("/settings/llm")
+@router.put("/settings/llm", dependencies=[Depends(require_admin)])
 def update_llm(body: LLMSettingsUpdate, db: Session = Depends(get_db)) -> dict[str, Any]:
     r = get_router()
     ov = r.overrides
@@ -127,7 +127,7 @@ def update_llm(body: LLMSettingsUpdate, db: Session = Depends(get_db)) -> dict[s
     return _llm_state()
 
 
-@router.post("/settings/llm/test")
+@router.post("/settings/llm/test", dependencies=[Depends(require_admin)])
 def test_llm(body: LLMTestRequest) -> dict[str, Any]:
     base = get_router()
     provider = body.provider or base.overrides.get("provider") or get_settings().llm_provider

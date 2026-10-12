@@ -134,3 +134,47 @@ class DemoReset(BaseModel):
 
 def dump(model: BaseModel) -> dict[str, Any]:
     return model.model_dump(exclude_unset=True)
+
+
+# ---------------------------------------------------------------------------- accounts
+
+
+class SignupRequest(BaseModel):
+    email: str = Field(max_length=254)
+    password: str = Field(max_length=256)
+    name: str | None = Field(default=None, max_length=120)
+    issue_token: bool = False  # also return the session token (for API clients; browsers use the cookie)
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(max_length=254)
+    password: str = Field(max_length=256)
+    remember: bool = True
+    issue_token: bool = False
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str = Field(max_length=254)
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(max_length=200)
+    password: str = Field(max_length=256)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(max_length=256)
+    new_password: str = Field(max_length=256)
+
+
+class DeleteAccountRequest(BaseModel):
+    password: str | None = Field(default=None, max_length=256)
+
+
+class ClientErrorReport(BaseModel):
+    event_id: str | None = Field(default=None, max_length=64)
+    message: str = Field(default="", max_length=2000)
+    stack: str | None = Field(default=None, max_length=8000)
+    url: str | None = Field(default=None, max_length=1000)
+    user_agent: str | None = Field(default=None, max_length=400)
+    context: dict[str, Any] | None = None

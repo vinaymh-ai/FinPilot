@@ -37,6 +37,8 @@ import httpx
 
 from finpilot.config import Settings, get_settings
 from finpilot.llm.client import current_run_id, log_step_call
+from finpilot.observability.calls import record_model_call
+from finpilot.observability.tracing import traceable
 
 log = logging.getLogger(__name__)
 
@@ -343,6 +345,7 @@ class JevClient:
             }
         return body
 
+    @traceable("jev.evaluate", run_type="llm")
     def evaluate(
         self,
         state: Any,
@@ -364,19 +367,22 @@ class JevClient:
                 try:
                     ev = self._parse(hit, questions, latency_ms=0)
                     ev.cached, ev.input_tokens, ev.cost_usd = True, 0, 0.0
-                    self._record(agent, purpose, ev, success=True)
+                    self._record(agent, purpose, ev, success=True, request=body, response=hit)
                     return ev
                 except JevError:
                     pass  # stale/incompatible cache entry → ask again
+        data: dict[str, Any] | None = None
         try:
             data, latency = self._post(body)
             ev = self._parse(data, questions, latency_ms=latency)
         except JevError as exc:
-            self._record(agent, purpose, None, success=False, error=str(exc)[:500])
+            self._record(
+                agent, purpose, None, success=False, error=str(exc)[:500], request=body, response=data
+            )
             raise
         if key:
             self._cache_put(key, data)
-        self._record(agent, purpose, ev, success=True)
+        self._record(agent, purpose, ev, success=True, request=body, response=data)
         return ev
 
     def evaluate_many(
@@ -516,7 +522,15 @@ class JevClient:
             log.debug("jev cache write failed", exc_info=True)
 
     def _record(
-        self, agent: str, purpose: str, ev: Evaluation | None, *, success: bool, error: str | None = None
+        self,
+        agent: str,
+        purpose: str,
+        ev: Evaluation | None,
+        *,
+        success: bool,
+        error: str | None = None,
+        request: dict[str, Any] | None = None,
+        response: Any = None,
     ) -> None:
         entry = {
             "agent": agent,
@@ -531,14 +545,9 @@ class JevClient:
             "cost_usd": ev.cost_usd if ev else 0.0,
         }
         log_step_call({**entry, "purpose": purpose})
-        from finpilot.db import session_scope
-        from finpilot.models import LLMCall
-
-        try:
-            with session_scope() as s:
-                s.add(LLMCall(run_id=current_run_id(), error=error, purpose=purpose[:64], **entry))
-        except Exception:  # noqa: BLE001
-            log.debug("failed to record Jev call", exc_info=True)
+        record_model_call(
+            entry, run_id=current_run_id(), error=error, purpose=purpose, request=request, response=response
+        )
 
 
 def _retry_after(resp: httpx.Response) -> float | None:
