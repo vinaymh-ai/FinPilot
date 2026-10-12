@@ -2,10 +2,14 @@
 
 Cascade (cheapest, most certain first):
     1. memory   — the user's own past corrections for this merchant (learning from feedback)
-    2. history  — how this merchant was categorised before (by the LLM or the user)
+    2. history  — how this merchant was categorised before (by Jev, the LLM or the user)
     3. rule     — curated merchant lexicon (≈200 Indian + global brands)
     4. keyword  — generic token evidence ("MEDICALS", "PETROL", "SALON"), amount- and sign-aware
-    5. llm      — batched, per *unique merchant*, only for what is still uncertain
+    5. jev      — System One decision per *unique merchant*, only for what is still uncertain:
+                  category + payee type + service family in one request, all merchants in
+                  parallel. Answers below the confidence threshold are deferred (the rules
+                  answer stands) — or, if `CATEGORIZER_ESCALATE_TO_LLM`, cascaded to the LLM.
+       llm      — the batched LLM classifier, used only when Jev is not configured
     6. pattern  — post-pass: an unknown merchant charging the same amount every month is a
                   subscription, whatever its name says
 The output therefore genuinely depends on each transaction's text, amount, sign and history.
@@ -19,6 +23,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from finpilot.agents.base import BaseAgent
+from finpilot.decisions.jev import ChoiceAnswer, Evaluation
+from finpilot.decisions.policy import DecisionRecord, log_decisions, order_debias_many, record
+from finpilot.decisions.spec import merchant_questions, merchant_state
 from finpilot.domain.lexicon import keyword_scores, match_merchant
 from finpilot.domain.normalize import looks_like_person, merchant_key
 from finpilot.domain.recurring import TxnLite, detect_recurring
@@ -54,6 +61,16 @@ class CategorizerStats:
     llm_batches: int = 0
     llm_error: str | None = None
     model: str = "rules"
+    jev_merchants: int = 0
+    jev_accepted: int = 0
+    jev_deferred: int = 0
+    jev_escalated: int = 0
+    jev_errors: int = 0
+    jev_tokens: int = 0
+    jev_cost_usd: float = 0.0
+    order_checked: int = 0
+    order_flipped: int = 0
+    decision_model: str = "off"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -63,7 +80,33 @@ class CategorizerStats:
             "llm_batches": self.llm_batches,
             "llm_error": self.llm_error,
             "model": self.model,
+            "decision_model": self.decision_model,
+            "jev": {
+                "merchants": self.jev_merchants,
+                "accepted": self.jev_accepted,
+                "deferred": self.jev_deferred,
+                "escalated": self.jev_escalated,
+                "errors": self.jev_errors,
+                "input_tokens": self.jev_tokens,
+                "cost_usd": round(self.jev_cost_usd, 6),
+                "order_checked": self.order_checked,
+                "order_flipped": self.order_flipped,
+            },
         }
+
+
+@dataclass
+class MerchantDecision:
+    """What System One decided about one merchant — persisted as a MerchantProfile."""
+
+    merchant: str
+    credit: bool
+    category: str
+    confidence: float
+    payee_type: str | None
+    service_family: str | None
+    probabilities: dict[str, float]
+    accepted: bool
 
 
 SYSTEM_PROMPT = """You are the Categorizer agent of FinPilot, a personal-finance co-pilot (default market: India, INR).
@@ -95,12 +138,15 @@ class CategorizerAgent(BaseAgent):
         memory: dict[str, str] | None = None,
         history: dict[str, str] | None = None,
         batch_size: int = 40,
+        currency: str = "INR",
         **kwargs: Any,
     ):
         super().__init__(*args, **kwargs)
         self.memory = {k.upper(): v for k, v in (memory or {}).items()}
         self.history = {k.upper(): v for k, v in (history or {}).items()}
         self.batch_size = batch_size
+        self.currency = currency
+        self.profiles: list[MerchantDecision] = []  # filled by the Jev stage, persisted by the coordinator
 
     # ------------------------------------------------------------------ deterministic stages
     def rule_categorize(self, item: CatItem) -> CatResult:
@@ -176,11 +222,140 @@ class CategorizerAgent(BaseAgent):
             return CatResult(item.key, merchant, cat, "keyword", round(min(0.9, score), 2), reason)
         return CatResult(item.key, merchant, "other", "fallback", 0.25, "No rule or keyword matched")
 
+    # ------------------------------------------------------------------ Jev stage (System One)
+    def _uncertain_groups(
+        self, items: list[CatItem], results: dict[int, CatResult], only: set[tuple[str, bool]] | None = None
+    ) -> list[tuple[tuple[str, bool], list[CatItem]]]:
+        """Still-uncertain transactions grouped per unique merchant + direction (one decision each)."""
+        by_merchant: dict[tuple[str, bool], list[CatItem]] = defaultdict(list)
+        for it in items:
+            r = results[it.key]
+            if r.confidence < LLM_THRESHOLD:
+                key = (r.merchant, it.amount > 0)
+                if only is None or key in only:
+                    by_merchant[key].append(it)
+        return list(by_merchant.items())
+
+    def _jev_refine(
+        self, items: list[CatItem], results: dict[int, CatResult], stats: CategorizerStats
+    ) -> set[tuple[str, bool]]:
+        """Ask Jev about every uncertain merchant. Returns the merchants it deferred on."""
+        groups = self._uncertain_groups(items, results)
+        if not groups:
+            return set()
+        jobs = []
+        for (merchant, credit), its in groups:
+            amounts = sorted(abs(i.amount) for i in its)
+            jobs.append(
+                (
+                    merchant_state(
+                        merchant,
+                        its[0].description,
+                        credit=credit,
+                        typical_amount=amounts[len(amounts) // 2],
+                        count=len(its),
+                        currency=self.currency,
+                    ),
+                    merchant_questions(credit=credit),
+                )
+            )
+        stats.jev_merchants = len(groups)
+        stats.decision_model = self.jev.describe()
+        evals = self.jev.evaluate_many(jobs, agent=self.name, purpose="merchant_category")
+        evals, ostats = order_debias_many(
+            self.jev, jobs, evals, agent=self.name, purpose="merchant_category", names={"category"}
+        )
+        stats.order_checked, stats.order_flipped = ostats["checked"], ostats["flipped"]
+        threshold = self.jev.accept_confidence
+        deferred: set[tuple[str, bool]] = set()
+        decisions: list[DecisionRecord] = []
+        for ((merchant, credit), its), ev in zip(groups, evals, strict=True):
+            if not isinstance(ev, Evaluation):
+                stats.jev_errors += 1
+                deferred.add((merchant, credit))
+                continue
+            stats.jev_tokens += ev.input_tokens
+            stats.jev_cost_usd += ev.cost_usd
+            cat: ChoiceAnswer = ev["category"]
+            payee = ev.answers.get("payee_type")
+            family = ev.answers.get("service_family")
+            category, conf, why = cat.choice, cat.confidence, None
+            ok = conf >= threshold and category != "other"
+            if not ok and payee is not None and payee.choice == "person" and payee.confidence >= threshold:
+                # the category is unclear but the payee is clearly a person → a P2P transfer
+                category, conf, ok = "transfers", payee.confidence, True
+                why = f"Jev: payment to an individual (p={payee.p('person'):.2f})"
+            flipped = "category" in ev.meta.get("order_flipped", [])
+            if ok:
+                stats.jev_accepted += 1
+                if why is None:
+                    ru = cat.runner_up
+                    why = f"Jev: {BY_ID[category].label} (p={cat.p(category):.2f}" + (
+                        f"; next {BY_ID[ru[0]].label} {ru[1]:.2f})" if ru and ru[0] in BY_ID else ")"
+                    )
+                    if ev.meta.get("order_checked"):
+                        why += " — consistent when options were reordered" if not flipped else ""
+                for it in its:
+                    prev = results[it.key]
+                    if conf >= prev.confidence or prev.source == "fallback":
+                        results[it.key] = CatResult(
+                            it.key, prev.merchant, category, "jev", round(min(conf, 0.97), 2), why
+                        )
+            else:
+                stats.jev_deferred += 1
+                deferred.add((merchant, credit))
+            self.profiles.append(
+                MerchantDecision(
+                    merchant=merchant,
+                    credit=credit,
+                    category=category,
+                    confidence=round(conf, 4),
+                    payee_type=payee.choice if payee is not None and payee.confidence >= threshold else None,
+                    service_family=(
+                        family.choice if family is not None and family.confidence >= threshold else None
+                    ),
+                    probabilities={k: round(v, 4) for k, v in cat.probabilities.items() if v >= 0.01},
+                    accepted=ok,
+                )
+            )
+            decisions.append(
+                record(
+                    ev,
+                    "category",
+                    agent=self.name,
+                    purpose="merchant_category",
+                    subject=f"{merchant} ({'credit' if credit else 'debit'}, {len(its)} txns)",
+                    action="accepted" if ok else "deferred",
+                )
+            )
+            if family is not None and family.choice not in ("none", "utility_bill"):
+                decisions.append(
+                    record(
+                        ev,
+                        "service_family",
+                        agent=self.name,
+                        purpose="service_family",
+                        subject=merchant,
+                        action="accepted" if family.confidence >= threshold else "deferred",
+                    )
+                )
+        log_decisions(decisions)
+        return deferred
+
     # ------------------------------------------------------------------ LLM stage
     def _llm_refine(
-        self, items: list[CatItem], results: dict[int, CatResult], stats: CategorizerStats
+        self,
+        items: list[CatItem],
+        results: dict[int, CatResult],
+        stats: CategorizerStats,
+        only: set[tuple[str, bool]] | None = None,
     ) -> None:
-        uncertain = [results[i.key] for i in items if results[i.key].confidence < LLM_THRESHOLD]
+        uncertain = [
+            results[i.key]
+            for i in items
+            if results[i.key].confidence < LLM_THRESHOLD
+            and (only is None or (results[i.key].merchant, i.amount > 0) in only)
+        ]
         if not uncertain or not self.llm_available:
             return
         # one query per unique merchant (+direction): 300 Swiggy-like rows cost a single line
@@ -269,9 +444,18 @@ class CategorizerAgent(BaseAgent):
     def categorize(
         self, items: list[CatItem], *, use_patterns: bool = True
     ) -> tuple[list[CatResult], CategorizerStats]:
-        stats = CategorizerStats(total=len(items), model=self.model_label)
+        stats = CategorizerStats(total=len(items), model="rules")
         results = {it.key: self.rule_categorize(it) for it in items}
-        self._llm_refine(items, results, stats)
+        self.profiles = []
+        if self.jev_available:
+            deferred = self._jev_refine(items, results, stats)
+            # Cascading low-confidence answers to an LLM is opt-in: in independent tests the fallback
+            # model fixed fewer errors than it introduced. Enable only after `run_eval --jev` shows a gain.
+            if deferred and self.jev.escalate_to_llm and self.llm_available:
+                stats.jev_escalated = len(deferred)
+                self._llm_refine(items, results, stats, only=deferred)
+        else:
+            self._llm_refine(items, results, stats)
         if use_patterns:
             self.pattern_refine(results, items)
         for r in results.values():

@@ -55,7 +55,34 @@ def get_engine() -> Engine:
 def init_db() -> None:
     from finpilot import models  # noqa: F401 - register tables
 
-    Base.metadata.create_all(get_engine())
+    engine = get_engine()
+    Base.metadata.create_all(engine)
+    _add_missing_columns(engine)
+
+
+def _add_missing_columns(engine: Engine) -> list[str]:
+    """Additive schema upgrade: create nullable columns that newer code expects.
+
+    `create_all` creates missing *tables* but never alters existing ones, so a database created
+    by an earlier version would lack new columns. Only nullable columns are added (no data
+    rewrites); anything more invasive belongs in a real migration tool such as Alembic.
+    """
+    from sqlalchemy import inspect
+
+    insp = inspect(engine)
+    added: list[str] = []
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            if not insp.has_table(table.name):
+                continue
+            existing = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name in existing or not col.nullable:
+                    continue
+                ddl_type = col.type.compile(dialect=engine.dialect)
+                conn.exec_driver_sql(f'ALTER TABLE {table.name} ADD COLUMN "{col.name}" {ddl_type}')
+                added.append(f"{table.name}.{col.name}")
+    return added
 
 
 def new_session() -> Session:

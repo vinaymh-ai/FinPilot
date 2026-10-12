@@ -115,6 +115,10 @@ def goal(g: Goal, projection: dict[str, Any] | None = None) -> dict[str, Any]:
         else 0,
         "history": g.history or [],
         "projection": projection,
+        "goal_type": g.goal_type,
+        "spend_at_deadline": g.spend_at_deadline,
+        "type_source": g.type_source,
+        "type_confidence": g.type_confidence,
     }
 
 

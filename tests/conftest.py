@@ -27,6 +27,7 @@ import pytest  # noqa: E402
 
 from finpilot.config import Settings, get_settings  # noqa: E402
 from finpilot.db import Base, configure_database, get_engine, init_db, session_scope  # noqa: E402
+from finpilot.decisions.jev import JevClient, set_jev  # noqa: E402
 from finpilot.llm.client import LLMResponse, LLMRouter, set_router  # noqa: E402
 from finpilot.llm.providers import ProviderSpec  # noqa: E402
 
@@ -39,6 +40,7 @@ def fresh_db() -> Iterator[None]:
     Base.metadata.drop_all(get_engine())
     init_db()
     set_router(LLMRouter(Settings(llm_enabled=False)))
+    set_jev(JevClient(Settings(jev_enabled=False)))
     yield
 
 
@@ -96,3 +98,92 @@ def seeded(db, demo_end):
     info = seed_demo(db, end=demo_end)
     db.commit()
     return info
+
+
+# ----------------------------------------------------------------------------- simulated System One
+
+Picker = Callable[[Any, list[str]], "dict[str, float] | str | None"]
+
+
+class FakeJev:
+    """A stand-in for Mesh `POST /v1/evaluate`, served through httpx.MockTransport.
+
+    Each question name can have a picker: (state, option_keys) → preferred key (answered with
+    p=0.92) or a full probability dict. Unknown questions get a flat distribution (confidence 0),
+    which exercises the "defer" paths. Every request body is recorded for assertions.
+    """
+
+    def __init__(self, pickers: dict[str, Picker] | None = None, *, nouls: dict[str, float] | None = None):
+        import httpx
+
+        self.pickers = dict(pickers or {})
+        self.nouls = dict(nouls or {})
+        self.requests: list[dict[str, Any]] = []
+        self.fail_next: list[int] = []  # status codes to return before succeeding
+        self.transport = httpx.MockTransport(self._handle)
+
+    def client(self, **overrides: Any) -> JevClient:
+        settings = Settings(mesh_api_key="rsk_test", jev_enabled=True, **overrides)
+        return JevClient(settings, transport=self.transport)
+
+    def _handle(self, request):
+        import httpx
+
+        if self.fail_next:
+            return httpx.Response(self.fail_next.pop(0), text="simulated upstream error")
+        body = json.loads(request.content)
+        self.requests.append(body)
+        answers: dict[str, Any] = {}
+        for name, q in body["questions"].items():
+            if q["type"] == "noul":
+                answers[name] = {"type": "noul", "noul": self.nouls.get(name, 0.5)}
+                continue
+            keys = [
+                str(k)
+                for k in (q["criteria"] if isinstance(q["criteria"], dict) else range(len(q["criteria"])))
+            ]
+            pick = self.pickers.get(name)
+            out = pick(body["state"], keys) if pick else None
+            if isinstance(out, str) and out in keys:
+                probs = {k: (0.92 if k == out else 0.08 / (len(keys) - 1)) for k in keys}
+            elif isinstance(out, dict):
+                probs = {k: float(out.get(k, 0.0)) for k in keys}
+                total = sum(probs.values()) or 1.0
+                probs = {k: v / total for k, v in probs.items()}
+            else:
+                probs = {k: 1 / len(keys) for k in keys}
+            top = max(probs, key=lambda k: probs[k])
+            n = len(keys)
+            conf = (probs[top] - 1 / n) / (1 - 1 / n)
+            if q["type"] == "choice":
+                answers[name] = {"type": "choice", "choice": top, "probabilities": probs, "confidence": conf}
+            else:
+                score = sum(int(k) * v for k, v in probs.items())
+                legend = {str(i): c for i, c in enumerate(q["criteria"])}
+                answers[name] = {
+                    "type": "score",
+                    "score": score,
+                    "legend": legend,
+                    "probabilities": probs,
+                    "confidence": conf,
+                }
+        return httpx.Response(
+            200,
+            json={
+                "id": f"eval_{len(self.requests)}",
+                "model": body["model"],
+                "answers": answers,
+                "usage": {"input_tokens": len(request.content) // 4, "output_tokens": 20},
+            },
+        )
+
+
+@pytest.fixture
+def fake_jev_factory():
+    def make(pickers: dict[str, Picker] | None = None, *, nouls: dict[str, float] | None = None, **overrides):
+        fake = FakeJev(pickers, nouls=nouls)
+        client = fake.client(**overrides)
+        set_jev(client)
+        return fake, client
+
+    return make

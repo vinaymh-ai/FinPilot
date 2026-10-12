@@ -13,6 +13,7 @@ from finpilot.api.deps import current_user_id, get_db
 from finpilot.models import Goal, Insight, Recommendation
 from finpilot.schemas import GoalCreate, GoalUpdate, RecommendationUpdate, SimulationRequest, dump
 from finpilot.services import repository as repo
+from finpilot.services.goal_types import GoalTyping, apply_typing, classify_goal, rules_goal_type
 from finpilot.services.toolkit import FinanceToolkit
 
 router = APIRouter()
@@ -143,10 +144,28 @@ def list_goals(uid: int = Depends(current_user_id), db: Session = Depends(get_db
 def create_goal(
     body: GoalCreate, uid: int = Depends(current_user_id), db: Session = Depends(get_db)
 ) -> dict[str, Any]:
-    g = Goal(user_id=uid, **body.model_dump())
+    data = body.model_dump()
+    user_type, user_spend = data.pop("goal_type"), data.pop("spend_at_deadline")
+    g = Goal(user_id=uid, **data)
+    _type_goal(db, uid, g, user_type, user_spend)
     db.add(g)
     db.commit()
     return {"goal": ser.goal(g), "hint": "Run the agents to project this goal"}
+
+
+def _type_goal(db: Session, uid: int, g: Goal, user_type: str | None, user_spend: bool | None) -> None:
+    """A user's explicit choice wins; otherwise System One (or the keyword fallback) decides."""
+    if user_type is not None or user_spend is not None:
+        guess = rules_goal_type(g.name)
+        gtype = user_type or (g.goal_type if g.type_source == "user" else guess.goal_type)
+        spend = user_spend if user_spend is not None else guess.spend_at_deadline
+        apply_typing(g, GoalTyping(gtype, spend, "user", 1.0))
+        return
+    if g.type_source == "user":
+        return
+    user = repo.get_or_create_user(db, uid)
+    _, as_of = repo.current_balance(db, user)
+    apply_typing(g, classify_goal(g.name, float(g.target_amount), g.deadline, as_of, user.currency))
 
 
 @router.patch("/goals/{goal_id}")
@@ -156,8 +175,13 @@ def update_goal(
     g = db.get(Goal, goal_id)
     if g is None or g.user_id != uid:
         raise HTTPException(404, "goal not found")
-    for k, v in dump(body).items():
+    changes = dump(body)
+    user_type, user_spend = changes.pop("goal_type", None), changes.pop("spend_at_deadline", None)
+    renamed = "name" in changes and changes["name"] != g.name
+    for k, v in changes.items():
         setattr(g, k, v)
+    if user_type is not None or user_spend is not None or renamed:
+        _type_goal(db, uid, g, user_type, user_spend)
     db.commit()
     return {"goal": ser.goal(g, _projections(db, uid).get(g.id))}
 

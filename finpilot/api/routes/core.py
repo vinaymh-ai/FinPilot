@@ -16,6 +16,7 @@ from finpilot.agents.coordinator import Coordinator
 from finpilot.api import serializers as ser
 from finpilot.api.deps import current_user_id, get_db
 from finpilot.config import ROOT_DIR, get_settings
+from finpilot.decisions.jev import get_jev
 from finpilot.domain.stats import month_key
 from finpilot.domain.taxonomy import NON_SPEND, as_dicts, label
 from finpilot.llm.client import AGENTS, get_router
@@ -37,8 +38,8 @@ AGENT_CARDS = [
     {
         "id": "categorizer",
         "name": "Categorizer",
-        "role": "Memory → merchant lexicon → keyword evidence → batched LLM "
-        "for the long tail → recurring-pattern post-pass",
+        "role": "Memory → merchant lexicon → keyword evidence → Jev decision per unknown merchant "
+        "(category, payee, service family) → recurring-pattern post-pass",
     },
     {
         "id": "analyzer",
@@ -49,19 +50,20 @@ AGENT_CARDS = [
     {
         "id": "forecaster",
         "name": "Forecaster",
-        "role": "Monte-Carlo cash-flow projection, goal probabilities and "
-        "what-if simulation on common random numbers",
+        "role": "Monte-Carlo cash-flow projection, goal probabilities (spend vs reserve goals typed "
+        "by Jev) and what-if simulation on common random numbers",
     },
     {
         "id": "advisor",
         "name": "Advisor",
-        "role": "Ranks specific, quantified actions with trigger + evidence; "
-        "LLM phrasing behind a numeric grounding check",
+        "role": "Ranks specific, quantified actions with trigger + evidence; LLM phrasing behind "
+        "a numeric grounding check and a Jev faithfulness check",
     },
     {
         "id": "chat",
         "name": "Chat",
-        "role": "Tool-calling assistant over your real data (simulate, spending, goals…)",
+        "role": "Jev routes each question; simple ones answered straight from tools, complex ones "
+        "escalated to the LLM tool loop",
     },
     {"id": "digest", "name": "Digest", "role": "Scheduled weekly digest: one key insight + one action"},
 ]
@@ -75,6 +77,7 @@ def health(db: Session = Depends(get_db)) -> dict[str, Any]:
         "status": "ok",
         "version": __version__,
         "llm": {"enabled": r.enabled, "advisor": r.describe("advisor")},
+        "decisions": get_jev().describe(),
         "scheduler": scheduler.running,
         "time": dt.datetime.now(dt.UTC).isoformat(),
     }
@@ -95,6 +98,7 @@ def meta(uid: int = Depends(current_user_id), db: Session = Depends(get_db)) -> 
         "categories": as_dicts(),
         "agents": cards,
         "llm_enabled": r.enabled,
+        "decisions": get_jev().describe(),
     }
 
 

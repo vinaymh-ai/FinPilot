@@ -7,7 +7,10 @@ Model ("if you keep behaving like this"):
   stratified by weekday (weekends look like weekends) and recency-weighted (the last 30 days count
   double), with one-off anomalies removed. 400 Monte-Carlo paths give P10/P50/P90 bands.
 * **Goals** — funded in priority order from balance above a safety buffer; per-path funding
-  gives a probability of hitting each goal, the projected shortfall and an ETA.
+  gives a probability of hitting each goal, the projected shortfall and an ETA. A *spend* goal
+  (a trip, a laptop — classified by Jev from the goal's name) leaves the account on its deadline,
+  so the balance bands, low point and overdraft risk include that outflow; a *reserve* goal
+  (an emergency fund) stays in the account as earmarked savings.
 * **What-if** — a scenario (one-off purchase, new recurring cost, category cut, cancelled
   subscriptions, income change) is replayed on the *same random draws* as the baseline
   (common random numbers), so the reported delta is the effect of the decision, not noise.
@@ -24,6 +27,7 @@ from typing import Any
 import numpy as np
 
 from finpilot.agents.base import BaseAgent
+from finpilot.decisions.guard import check_faithfulness
 from finpilot.domain.recurring import RecurringCandidate, TxnLite
 from finpilot.domain.stats import add_months, month_key
 from finpilot.domain.taxonomy import DISCRETIONARY, ESSENTIAL, label
@@ -43,6 +47,7 @@ class GoalInput:
     saved: float
     deadline: dt.date
     priority: int = 1
+    spend_at_deadline: bool = False  # True → the funded amount leaves the account on the deadline
 
 
 @dataclass
@@ -293,7 +298,13 @@ class ForecastEngine:
     def summarize(
         self, out: _RunOutput, events: list[dict[str, Any]], *, series: bool = True
     ) -> dict[str, Any]:
-        P = out.paths
+        goals, outflow, goal_events = self._goals(out.paths, np.percentile(out.paths, 50, axis=0))
+        P, expected = out.paths, out.expected
+        if outflow is not None:  # spend goals: the money they were funded with leaves on the deadline
+            P = P - outflow
+            expected = expected - outflow.mean(axis=0)
+            events = sorted(events + goal_events, key=lambda e: e["date"])
+        out = _RunOutput(P, expected, out.recurring_flow)
         p10, p50, p90 = np.percentile(P, [10, 50, 90], axis=0)
         low_i = int(np.argmin(p50))
         path_min = P.min(axis=1)
@@ -319,7 +330,7 @@ class ForecastEngine:
             "prob_below_buffer": round(float(below_buffer.mean()), 3),
             "first_risk_date": self.dates[int(risk_days[0])].isoformat() if risk_days.size else None,
             "checkpoints": self._checkpoints(p10, p50, p90),
-            "goals": self._goals(P, p50),
+            "goals": goals,
             "monthly": self._monthly(out, events),
             "upcoming": [e for e in events if e["date"] <= (self.as_of + dt.timedelta(days=30)).isoformat()],
         }
@@ -356,8 +367,18 @@ class ForecastEngine:
                 )
         return out
 
-    def _goals(self, P: np.ndarray, p50: np.ndarray) -> list[dict[str, Any]]:
+    def _goals(
+        self, P: np.ndarray, p50: np.ndarray
+    ) -> tuple[list[dict[str, Any]], np.ndarray | None, list[dict[str, Any]]]:
+        """Goal odds on the pre-goal paths, plus the outflow matrix of spend goals.
+
+        Probabilities are computed with per-path reservations (money promised to higher-priority
+        goals is unavailable), which treats spend and reserve goals identically — the difference is
+        only whether the money is still in the account afterwards, i.e. the returned outflow.
+        """
         results = []
+        outflow: np.ndarray | None = None
+        goal_events: list[dict[str, Any]] = []
         reserved = np.zeros(P.shape[0])  # per-path money already promised to higher-priority goals
         reserved_med = 0.0
         avail_med = p50 - self.safety_buffer
@@ -380,6 +401,7 @@ class ForecastEngine:
                         "eta": None,
                         "required_monthly": 0.0,
                         "months_left": round(months_left, 1),
+                        "spend_at_deadline": g.spend_at_deadline,
                     }
                 )
                 continue
@@ -406,11 +428,26 @@ class ForecastEngine:
                     "eta": eta.isoformat() if eta else None,
                     "required_monthly": round(shortfall / months_left, 2) if shortfall > 0 else 0.0,
                     "months_left": round(months_left, 1),
+                    "spend_at_deadline": g.spend_at_deadline,
                 }
             )
             reserved = reserved + funded
             reserved_med += med_funded
-        return results
+            if g.spend_at_deadline and (g.deadline - self.as_of).days >= 1:
+                # spend what was saved for it (never more): the account keeps its buffer
+                if outflow is None:
+                    outflow = np.zeros_like(P)
+                outflow[:, di:] += funded[:, None]
+                goal_events.append(
+                    {
+                        "date": self.dates[di].isoformat(),
+                        "merchant": f"Goal: {g.name}",
+                        "amount": -round(float(np.median(funded)), 2),
+                        "kind": "goal_spend",
+                        "category": "goal",
+                    }
+                )
+        return results, outflow, goal_events
 
     def _eta(self, avail: np.ndarray, remaining: float) -> dt.date | None:
         # first day from which the goal stays funded (salary-day spikes don't count)
@@ -780,5 +817,10 @@ class ForecasterAgent(BaseAgent):
         data, label_, _ = self.safe_ask_json(facts, max_tokens=400, temperature=0.2)
         text = data.get("narrative") if isinstance(data, dict) else None
         if not text or not check_grounding(str(text), facts)[0]:
+            return fallback, "rules"
+        (verdict,) = check_faithfulness(
+            self.jev, [("forecast narrative", facts, str(text))], agent=self.name, enabled=self.use_jev
+        )
+        if not verdict.ok:
             return fallback, "rules"
         return str(text), label_ or "llm"

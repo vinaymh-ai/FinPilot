@@ -6,6 +6,7 @@ import html
 from typing import Any
 
 from finpilot.agents.base import BaseAgent
+from finpilot.decisions.guard import check_faithfulness
 from finpilot.llm.grounding import check_grounding
 
 SYSTEM_PROMPT = """You are the Digest agent of FinPilot. Write the opening of a short weekly money email to ONE user.
@@ -68,10 +69,25 @@ class DigestAgent(BaseAgent):
             self.system_prompt = SYSTEM_PROMPT.format(currency=currency)
             data, label_, _ = self.safe_ask_json(facts, max_tokens=300, temperature=0.4)
             if isinstance(data, dict) and data.get("intro") and check_grounding(str(data["intro"]), facts)[0]:
-                intro = str(data["intro"])
-                if data.get("subject") and check_grounding(str(data["subject"]), facts)[0]:
-                    subject = str(data["subject"])[:80]
-                model = label_ or "llm"
+                draft_subject = str(data.get("subject") or "")
+                subject_ok = bool(draft_subject) and check_grounding(draft_subject, facts)[0]
+                (verdict,) = check_faithfulness(
+                    self.jev,
+                    [
+                        (
+                            "digest intro",
+                            facts,
+                            str(data["intro"]) + (f"\nSubject: {draft_subject}" if subject_ok else ""),
+                        )
+                    ],
+                    agent=self.name,
+                    enabled=self.use_jev,
+                )
+                if verdict.ok:
+                    intro = str(data["intro"])
+                    if subject_ok:
+                        subject = draft_subject[:80]
+                    model = label_ or "llm"
         others = [r for r in recommendations[1:4]]
         md = [
             f"Hi {user_name.split()[0] if user_name else 'there'},",

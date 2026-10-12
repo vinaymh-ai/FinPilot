@@ -14,9 +14,10 @@ from fastapi.staticfiles import StaticFiles
 
 from finpilot import __version__
 from finpilot.api.deps import require_token
-from finpilot.api.routes import agents, core, planning, settings, transactions
+from finpilot.api.routes import agents, core, decisions, planning, settings, transactions
 from finpilot.config import get_settings
 from finpilot.db import init_db, session_scope
+from finpilot.decisions.jev import get_jev
 from finpilot.llm.client import get_router
 from finpilot.logging_config import configure_logging
 from finpilot.models import Transaction
@@ -32,6 +33,7 @@ def bootstrap() -> None:
     init_db()
     with session_scope() as db:
         get_router().set_overrides(repo.get_setting(db, "llm_overrides", {}) or {})
+        get_jev().set_overrides(repo.get_setting(db, "jev_overrides", {}) or {})
         repo.get_or_create_user(db)
         empty = db.query(Transaction).first() is None
         if empty and s.seed_demo_data:
@@ -56,7 +58,12 @@ async def lifespan(app: FastAPI):
         with session_scope() as db:
             cron = repo.get_setting(db, "digest_cron")
         scheduler.start(digest_cron=cron)
-    log.info("FinPilot %s ready (LLM: %s)", __version__, get_router().describe("advisor"))
+    log.info(
+        "FinPilot %s ready (decisions: %s; LLM: %s)",
+        __version__,
+        get_jev().describe(),
+        get_router().describe("advisor"),
+    )
     yield
     scheduler.shutdown()
 
@@ -67,8 +74,8 @@ def create_app() -> FastAPI:
         title="FinPilot API",
         version=__version__,
         lifespan=lifespan,
-        description="Proactive multi-agent personal-finance co-pilot. All LLM calls route through Mesh API "
-        "by default (OpenAI-compatible gateway).",
+        description="Proactive multi-agent personal-finance co-pilot. All AI calls route through Mesh API by "
+        "default: generation via /v1/chat/completions, typed decisions (Jev) via /v1/evaluate.",
     )
     app.add_middleware(GZipMiddleware, minimum_size=1024)
     app.add_middleware(
@@ -90,6 +97,7 @@ def create_app() -> FastAPI:
         (transactions.router, "transactions"),
         (planning.router, "planning"),
         (agents.router, "agents"),
+        (decisions.router, "decisions"),
         (settings.router, "settings"),
     ):
         app.include_router(r, prefix="/api", tags=[tag], dependencies=protected)

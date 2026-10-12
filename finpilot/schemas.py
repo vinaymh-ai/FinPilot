@@ -27,12 +27,20 @@ class RecurringUpdate(BaseModel):
     status: Literal["active", "cancelled"] | None = None
 
 
+GoalType = Literal[
+    "trip", "purchase", "event", "emergency_fund", "investment", "debt_payoff", "home", "education", "other"
+]
+
+
 class GoalCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     target_amount: float = Field(gt=0)
     saved_amount: float = Field(ge=0, default=0)
     deadline: dt.date
     priority: int = Field(ge=1, le=10, default=1)
+    # Optional: leave unset and System One classifies the goal from its name
+    goal_type: GoalType | None = None
+    spend_at_deadline: bool | None = None
 
 
 class GoalUpdate(BaseModel):
@@ -42,6 +50,8 @@ class GoalUpdate(BaseModel):
     deadline: dt.date | None = None
     priority: int | None = Field(default=None, ge=1, le=10)
     status: Literal["active", "achieved", "archived"] | None = None
+    goal_type: GoalType | None = None
+    spend_at_deadline: bool | None = None
 
 
 class AdjustmentIn(BaseModel):
@@ -101,6 +111,15 @@ class LLMSettingsUpdate(BaseModel):
 class LLMTestRequest(BaseModel):
     provider: str | None = None
     model: str | None = None
+
+
+class JevSettingsUpdate(BaseModel):
+    enabled: bool | None = None
+    accept_confidence: float | None = Field(default=None, ge=0, le=1)
+    route_confidence: float | None = Field(default=None, ge=0, le=1)
+    guard_confidence: float | None = Field(default=None, ge=0, le=1)
+    escalate_to_llm: bool | None = None
+    order_check: bool | None = None
 
 
 class SchedulerUpdate(BaseModel):

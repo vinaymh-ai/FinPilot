@@ -6,6 +6,7 @@ import json
 import logging
 from typing import Any
 
+from finpilot.decisions.jev import JevClient, get_jev
 from finpilot.llm.client import LLMError, LLMRouter, get_router
 
 log = logging.getLogger(__name__)
@@ -14,21 +15,36 @@ log = logging.getLogger(__name__)
 class BaseAgent:
     """An agent = a job + its own system prompt + its own tools + a deterministic fallback.
 
-    LLM use is always optional: `self.llm_available` is False when no provider is configured
-    (or the user disabled LLMs), and every agent then completes its job with rules/statistics.
+    Two kinds of model, both optional:
+    * **System One (Jev)** for closed-set decisions — which category, which intent, is this
+      faithful. Cheap (input tokens only), calibrated, and its answer is always a valid option.
+    * **System Two (LLM)** for open-ended generation — phrasing advice, multi-step reasoning.
+    When neither is configured every agent completes its job with rules and statistics.
     """
 
     name: str = "agent"
     role: str = ""
     system_prompt: str = ""
 
-    def __init__(self, router: LLMRouter | None = None, use_llm: bool = True):
+    def __init__(
+        self,
+        router: LLMRouter | None = None,
+        use_llm: bool = True,
+        jev: JevClient | None = None,
+        use_jev: bool = True,
+    ):
         self.router = router or get_router()
         self.use_llm = use_llm
+        self.jev = jev or get_jev()
+        self.use_jev = use_jev
 
     @property
     def llm_available(self) -> bool:
         return self.use_llm and self.router.available(self.name)
+
+    @property
+    def jev_available(self) -> bool:
+        return self.use_jev and self.jev.available()
 
     @property
     def model_label(self) -> str:

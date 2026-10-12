@@ -12,6 +12,7 @@ from starlette.concurrency import run_in_threadpool
 
 from finpilot.agents.coordinator import Coordinator
 from finpilot.api.deps import current_user_id, get_db
+from finpilot.api.routes.decisions import jev_state
 from finpilot.config import get_settings
 from finpilot.llm.client import AGENTS, LLMError, LLMRouter, get_router
 from finpilot.llm.providers import PROVIDERS, is_configured, resolve_api_key, resolve_base_url
@@ -73,6 +74,7 @@ def get_settings_view(uid: int = Depends(current_user_id), db: Session = Depends
             "digest_enabled": user.digest_enabled,
         },
         "llm": _llm_state(),
+        "decisions": jev_state(),
         "notifications": {
             "email_configured": bool(get_settings().smtp_host),
             "telegram_configured": bool(get_settings().telegram_bot_token),

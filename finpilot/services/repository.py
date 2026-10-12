@@ -19,6 +19,7 @@ from finpilot.models import (
     Goal,
     Insight,
     MerchantMemory,
+    MerchantProfile,
     Recommendation,
     RecurringSeries,
     Transaction,
@@ -86,6 +87,7 @@ def recurring_candidates(session: Session, user_id: int) -> list[RecurringCandid
         ids[rid].append(tid)
     from finpilot.domain.lexicon import rule_by_name
 
+    families = merchant_families(session, user_id)
     out = []
     for r in rows:
         rule = rule_by_name(r.merchant)
@@ -106,7 +108,8 @@ def recurring_candidates(session: Session, user_id: int) -> list[RecurringCandid
                 price_change_pct=r.price_change_pct,
                 status="cancelled" if r.status == "cancelled" else r.status,
                 txn_ids=ids.get(r.id, []),
-                group=rule.group if rule else None,
+                # lexicon knows the big brands; Jev's service family covers everything else
+                group=(rule.group if rule else None) or families.get(r.merchant.upper()),
                 parent=rule.parent if rule else None,
             )
         )
@@ -174,7 +177,15 @@ def save_recurring(session: Session, user_id: int, candidates: list[RecurringCan
 
 def goal_inputs(session: Session, user_id: int) -> list[GoalInput]:
     return [
-        GoalInput(g.id, g.name, float(g.target_amount), float(g.saved_amount), g.deadline, g.priority)
+        GoalInput(
+            g.id,
+            g.name,
+            float(g.target_amount),
+            float(g.saved_amount),
+            g.deadline,
+            g.priority,
+            spend_at_deadline=bool(g.spend_at_deadline),
+        )
         for g in session.scalars(select(Goal).where(Goal.user_id == user_id, Goal.status == "active"))
     ]
 
@@ -217,16 +228,61 @@ def merchant_memory(session: Session, user_id: int) -> dict[str, str]:
 
 
 def merchant_history(session: Session, user_id: int) -> dict[str, str]:
-    """Merchants previously categorised by the LLM, used for consistency (and to avoid re-paying for them)."""
+    """Merchants previously categorised by a model or the user — consistency, and never paying twice."""
     out: dict[str, str] = {}
     for merchant, category in session.execute(
         select(Transaction.merchant, Transaction.category).where(
-            Transaction.user_id == user_id, Transaction.category_source.in_(("llm", "user"))
+            Transaction.user_id == user_id, Transaction.category_source.in_(("llm", "jev", "user"))
         )
     ):
         if category:
             out[merchant.upper()] = category
     return out
+
+
+NON_OVERLAP_FAMILIES = {"none", "utility_bill"}
+
+
+def merchant_families(session: Session, user_id: int) -> dict[str, str]:
+    """Service family per merchant (from System One profiles) — used to spot overlapping subscriptions."""
+    return {
+        p.merchant_key: p.service_family
+        for p in session.scalars(
+            select(MerchantProfile).where(
+                MerchantProfile.user_id == user_id, MerchantProfile.service_family.is_not(None)
+            )
+        )
+        if p.service_family not in NON_OVERLAP_FAMILIES
+    }
+
+
+def save_merchant_profiles(session: Session, user_id: int, profiles: list[Any]) -> int:
+    """Upsert what Jev decided about each merchant (category, payee type, service family)."""
+    if not profiles:
+        return 0
+    existing = {
+        p.merchant_key: p
+        for p in session.scalars(select(MerchantProfile).where(MerchantProfile.user_id == user_id))
+    }
+    for d in profiles:
+        key = d.merchant.upper()
+        row = existing.get(key)
+        fields = dict(
+            category=d.category,
+            confidence=d.confidence,
+            payee_type=d.payee_type,
+            service_family=d.service_family,
+            probabilities=d.probabilities,
+            source="jev",
+        )
+        if row is None:
+            row = MerchantProfile(user_id=user_id, merchant_key=key, **fields)
+            session.add(row)
+            existing[key] = row
+        else:
+            for k, v in fields.items():
+                setattr(row, k, v)
+    return len(profiles)
 
 
 def remember_correction(session: Session, user_id: int, merchant: str, category: str) -> int:
@@ -330,6 +386,7 @@ def wipe_user_data(session: Session, user_id: int) -> None:
         Transaction,
         RecurringSeries,
         MerchantMemory,
+        MerchantProfile,
         Goal,
     ):
         session.execute(delete(model).where(model.user_id == user_id))

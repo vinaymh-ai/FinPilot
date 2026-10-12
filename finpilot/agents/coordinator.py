@@ -36,11 +36,13 @@ from finpilot.agents.digest import DigestAgent
 from finpilot.agents.forecaster import ForecasterAgent
 from finpilot.config import get_settings
 from finpilot.db import new_session
+from finpilot.decisions.jev import JevClient, get_jev
 from finpilot.domain.recurring import detect_recurring
 from finpilot.llm.client import LLMRouter, get_router, run_context, step_call_log
 from finpilot.models import AgentRun, AgentStep, Digest, Forecast, Insight, Recommendation, Transaction
 from finpilot.services import notifier
 from finpilot.services import repository as repo
+from finpilot.services.goal_types import ensure_goal_types
 
 log = logging.getLogger(__name__)
 
@@ -85,9 +87,17 @@ class Coordinator:
         "digest": DigestAgent,
     }
 
-    def __init__(self, router: LLMRouter | None = None, use_llm: bool = True):
+    def __init__(
+        self,
+        router: LLMRouter | None = None,
+        use_llm: bool = True,
+        jev: JevClient | None = None,
+        use_jev: bool = True,
+    ):
         self.router = router or get_router()
         self.use_llm = use_llm
+        self.jev = jev or get_jev()
+        self.use_jev = use_jev
         self.settings = get_settings()
 
     # ------------------------------------------------------------------ public
@@ -191,8 +201,12 @@ class Coordinator:
                     summary, details = f"{node} failed: {exc}", {"traceback": traceback.format_exc()[-2000:]}
                     status, error = "failed", str(exc)
             details = dict(details or {})
-            if calls:
-                details["llm_calls"] = calls
+            llm_calls = [c for c in calls if c.get("kind") != "jev"]
+            jev_calls = [c for c in calls if c.get("kind") == "jev"]
+            if llm_calls:
+                details["llm_calls"] = llm_calls
+            if jev_calls:
+                details["jev_calls"] = _summarise_jev(jev_calls)
             session.add(
                 AgentStep(
                     run_id=state["run_id"],
@@ -202,7 +216,7 @@ class Coordinator:
                     duration_ms=int((time.perf_counter() - t0) * 1000),
                     summary=summary,
                     details=_jsonable(details),
-                    llm_calls=len(calls),
+                    llm_calls=len(llm_calls),
                     error=error,
                 )
             )
@@ -212,7 +226,9 @@ class Coordinator:
         return runner
 
     def _agent(self, name: str, **kwargs: Any):
-        return self.AGENTS[name](router=self.router, use_llm=self.use_llm, **kwargs)
+        return self.AGENTS[name](
+            router=self.router, use_llm=self.use_llm, jev=self.jev, use_jev=self.use_jev, **kwargs
+        )
 
     # ------------------------------------------------------------------ nodes
     def _plan(self, session: Session, state: PipelineState):
@@ -234,10 +250,12 @@ class Coordinator:
             if self.use_llm and self.router.available("advisor")
             else "rules only"
         )
+        jev = self.jev.describe() if self.use_jev else "off"
         return (
             {"plan": plan, "n_transactions": n, "n_uncategorized": unc},
-            f"{n} transactions ({unc} uncategorised) → plan: {' → '.join(plan)} [LLM: {llm}]",
-            {"plan": plan, "transactions": n, "uncategorized": unc, "llm": llm},
+            f"{n} transactions ({unc} uncategorised) → plan: {' → '.join(plan)} "
+            f"[decisions: {jev}; LLM: {llm}]",
+            {"plan": plan, "transactions": n, "uncategorized": unc, "llm": llm, "decisions": jev},
         )
 
     @staticmethod
@@ -254,10 +272,12 @@ class Coordinator:
             targets = [t for t in rows if t.category is None]
         else:
             targets = [t for t in rows if t.category_source not in ("user",)]
+        user = repo.get_or_create_user(session, uid)
         agent = self._agent(
             "categorizer",
             memory=repo.merchant_memory(session, uid),
             history=repo.merchant_history(session, uid),
+            currency=user.currency,
         )
         items = [CatItem(t.id, t.description, float(t.amount), t.date) for t in targets]
         results, stats = agent.categorize(items)
@@ -266,15 +286,20 @@ class Coordinator:
             t = by_id[r.key]
             t.merchant, t.category, t.category_source = r.merchant, r.category, r.source
             t.category_confidence, t.category_reason = r.confidence, r.reason
+        repo.save_merchant_profiles(session, uid, agent.profiles)
         session.commit()
         st = stats.as_dict()
         src = ", ".join(f"{k} {v}" for k, v in sorted(st["by_source"].items(), key=lambda kv: -kv[1]))
-        return (
-            {"categorization": st},
-            f"Categorised {len(results)} transactions ({src})"
-            + (f"; LLM looked up {st['llm_merchants']} unknown merchants" if st["llm_merchants"] else ""),
-            st,
-        )
+        j = st["jev"]
+        tail = ""
+        if j["merchants"]:
+            tail = (
+                f"; Jev decided {j['merchants']} unknown merchants ({j['accepted']} accepted, "
+                f"{j['deferred']} deferred to rules, ${j['cost_usd']:.5f})"
+            )
+        elif st["llm_merchants"]:
+            tail = f"; LLM looked up {st['llm_merchants']} unknown merchants"
+        return ({"categorization": st}, f"Categorised {len(results)} transactions ({src}){tail}", st)
 
     def _analyze(self, session: Session, state: PipelineState):
         uid = state["user_id"]
@@ -344,6 +369,7 @@ class Coordinator:
         lite = [repo.to_lite(t) for t in rows]
         balance, as_of = repo.current_balance(session, user)
         series = repo.recurring_candidates(session, uid)
+        typed = ensure_goal_types(session, uid, as_of, user.currency, jev=self.jev, use_jev=self.use_jev)
         goals = repo.goal_inputs(session, uid)
         agent = self._agent(
             "forecaster",
@@ -384,8 +410,10 @@ class Coordinator:
                 "low_point": result["low_point"],
                 "prob_overdraft": result["prob_overdraft"],
                 "goals": [
-                    {k: g[k] for k in ("name", "probability", "status", "shortfall")} for g in result["goals"]
+                    {k: g[k] for k in ("name", "probability", "status", "shortfall", "spend_at_deadline")}
+                    for g in result["goals"]
                 ],
+                "goals_typed": typed,
                 "narrative_model": result.get("narrative_model"),
             },
         )
@@ -506,6 +534,23 @@ class Coordinator:
                 "digest_id": state.get("digest_id"),
             }
         )
+
+
+def _summarise_jev(calls: list[dict[str, Any]]) -> dict[str, Any]:
+    """Jev calls can number in the hundreds per step; keep the totals, not every row."""
+    by_purpose: dict[str, int] = {}
+    for c in calls:
+        by_purpose[c.get("purpose") or "?"] = by_purpose.get(c.get("purpose") or "?", 0) + 1
+    return {
+        "count": len(calls),
+        "cached": sum(1 for c in calls if c.get("cached")),
+        "failed": sum(1 for c in calls if not c.get("success")),
+        "input_tokens": sum(int(c.get("prompt_tokens") or 0) for c in calls),
+        "cost_usd": round(sum(float(c.get("cost_usd") or 0) for c in calls), 6),
+        "latency_ms_max": max((int(c.get("latency_ms") or 0) for c in calls), default=0),
+        "by_purpose": by_purpose,
+        "model": next((f"{c['provider']}:{c['model']}" for c in calls if c.get("model")), None),
+    }
 
 
 def _jsonable(obj: Any) -> Any:
