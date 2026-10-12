@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-12 10:36",
+  "generated_at": "2026-10-12 12:04",
   "mode": "deterministic (no LLM)",
   "seeds": [
     1,
@@ -312,7 +312,7 @@
   },
   "forecast": {
     "origins": 42,
-    "seconds": 3.3,
+    "seconds": 3.1,
     "metric": "mean |predicted \u2212 actual net cash-flow| as % of monthly income",
     "horizons": {
       "30": {
@@ -391,6 +391,70 @@
     "failures": [],
     "mode": "deterministic intent router (LLM-free fallback)"
   },
+  "jev": {
+    "model": "typesafe/jev-1.13",
+    "baselines": {
+      "merchants": {
+        "cases": 142,
+        "rules_unsure": 52,
+        "rules_accuracy_all": 0.6831,
+        "rules_accuracy_unsure": 0.2692
+      },
+      "chat": {
+        "cases": 62,
+        "regex_intent_accuracy": 0.5,
+        "regex_macro_f1": 0.4273,
+        "regex_can_refuse": false,
+        "blocked_messages": 12,
+        "complex_messages": 6,
+        "note": "The regex router can only pick one of 8 answerable intents: it cannot refuse an injection or a request to move money, and cannot tell when a question needs reasoning."
+      },
+      "faithfulness": {
+        "cases": 24,
+        "unfaithful": 18,
+        "numeric_check_recall": 0.2222,
+        "numeric_check_false_rejects": 0,
+        "unfaithful_without_numbers": 14,
+        "note": "The numeric grounding check only sees invented figures; invented causes, wrong merchants, reversed trends and boilerplate pass it."
+      },
+      "goals": {
+        "cases": 24,
+        "keyword_type_accuracy": 0.75,
+        "keyword_spend_accuracy": 0.9167
+      },
+      "csv_columns": {
+        "cases": 20,
+        "synonym_mapper_accuracy": 0.45,
+        "unmapped": 11
+      }
+    },
+    "request_estimates": {
+      "merchant_category": {
+        "estimated_input_tokens": 1004,
+        "jev_usd_per_1k_estimated": 0.0422,
+        "llm_usd_per_1k_estimated": 0.0396
+      },
+      "chat_route": {
+        "estimated_input_tokens": 1202,
+        "jev_usd_per_1k_estimated": 0.0505,
+        "llm_usd_per_1k_estimated": 0.6675
+      },
+      "faithfulness": {
+        "estimated_input_tokens": 230,
+        "jev_usd_per_1k_estimated": 0.0097
+      },
+      "goal_type": {
+        "estimated_input_tokens": 340,
+        "jev_usd_per_1k_estimated": 0.0143
+      },
+      "csv_column": {
+        "estimated_input_tokens": 219,
+        "jev_usd_per_1k_estimated": 0.0092
+      }
+    },
+    "how_to_run": "MESH_API_KEY=\u2026 python -m evaluation.run_eval --jev   (records evaluation/cassettes/jev.json; afterwards --jev-replay reproduces every number offline)",
+    "status": "pending \u2014 no Jev measurements in this run"
+  },
   "llm_note": "Deterministic run: no LLM calls were made. Run `python -m evaluation.run_eval --llm` with MESH_API_KEY set to measure the LLM long-tail stage (row 4) on the same data.",
-  "runtime_seconds": 17.8
+  "runtime_seconds": 17.6
 }

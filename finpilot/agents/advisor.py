@@ -8,8 +8,9 @@ Design: *numbers come from code, words may come from the LLM.*
    Dismissed advice is suppressed for 30 days unless the problem grows; repeated dismissals of a
    kind down-weight that kind — the advisor adapts to the user.
 3. Goal advice adapts to progress: each run is compared with the previous goal snapshot.
-4. Optionally, the LLM rewrites titles/messages in a friendlier voice. Every LLM sentence is
-   checked against the evidence; any number not in the evidence → template text is kept.
+4. Optionally, the LLM rewrites titles/messages in a friendlier voice. Every LLM sentence must
+   pass two checks against the evidence — numeric grounding (code) and claim support (Jev,
+   System One) — or the template text is kept.
 Each recommendation stores trigger, evidence and an ordered reasoning trail (the decision trail).
 """
 
@@ -22,6 +23,7 @@ from typing import Any
 
 from finpilot.agents.analyzer import AnalysisReport, Finding
 from finpilot.agents.base import BaseAgent
+from finpilot.decisions.guard import check_faithfulness
 from finpilot.domain.taxonomy import DISCRETIONARY, label
 from finpilot.llm.grounding import check_grounding
 
@@ -650,6 +652,7 @@ class AdvisorAgent(BaseAgent):
                 by_id[int(row["id"])] = row
             except (KeyError, TypeError, ValueError):
                 continue
+        passed: list[tuple[Candidate, str, str]] = []
         for i, c in enumerate(top):
             row = by_id.get(i)
             if not row or not row.get("title") or not row.get("message"):
@@ -659,16 +662,46 @@ class AdvisorAgent(BaseAgent):
             ok_t, bad_t = check_grounding(str(row["title"]), *facts)
             ok_m, bad_m = check_grounding(str(row["message"]), *facts)
             if ok_t and ok_m:
-                c.title, c.message = str(row["title"])[:120], str(row["message"])[:600]
-                c.generated_by = label_ or "llm"
-                c.reasoning.append(f"Phrasing: {c.generated_by} — numeric grounding check passed")
+                passed.append((c, str(row["title"])[:120], str(row["message"])[:600]))
             else:
                 c.reasoning.append(
                     f"Phrasing: LLM text rejected (ungrounded numbers {bad_t + bad_m}); template kept"
                 )
         headline = str(data.get("headline") or fallback_headline)
         all_facts = [c.to_dict() for c in top]
-        if not check_grounding(headline, all_facts)[0]:
+        headline_ok = check_grounding(headline, all_facts)[0]
+        # Second layer: does the draft claim anything the evidence doesn't support? (one Jev fan-out)
+        guard_items = [
+            (
+                f"{c.kind}: {c.key}",
+                {
+                    "template": {"title": c.title, "message": c.message},
+                    "evidence": {k: v for k, v in c.evidence.items() if k != "transaction_ids"},
+                },
+                f"{title}\n{message}",
+            )
+            for c, title, message in passed
+        ]
+        if headline_ok and headline != fallback_headline:
+            guard_items.append(
+                (
+                    "weekly headline",
+                    [{k: r[k] for k in ("title", "message", "monthly_impact")} for r in all_facts[:3]],
+                    headline,
+                )
+            )
+        verdicts = check_faithfulness(self.jev, guard_items, agent=self.name, enabled=self.use_jev)
+        for (c, title, message), v in zip(passed, verdicts, strict=False):
+            if v.ok:
+                c.title, c.message = title, message
+                c.generated_by = label_ or "llm"
+                checks = "numeric grounding passed" + (f"; {v.note()}" if v.checked else "")
+                c.reasoning.append(f"Phrasing: {c.generated_by} — {checks}")
+            else:  # the template is shown instead, so the recommendation stays grounded
+                c.reasoning.append(f"Phrasing: LLM text rejected — {v.note()}; template kept")
+        if len(verdicts) > len(passed) and not verdicts[-1].ok:
+            headline_ok = False
+        if not headline_ok:
             headline = fallback_headline
         return headline, label_ or "llm"
 

@@ -1,14 +1,145 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Check, Database, KeyRound, Plug, User, Zap } from "lucide-react";
+import { Bot, Check, Database, KeyRound, Plug, Scale, User, Zap } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Badge, Button, Card, CardHeader, Input, Label, PageHeader, Select, Skeleton, Toggle } from "../components/ui";
 import { api } from "../lib/api";
 import { cn, money } from "../lib/format";
 import { useRefreshAll } from "../lib/hooks";
-import type { LLMState, SettingsView } from "../lib/types";
+import type { JevState, LLMState, SettingsView } from "../lib/types";
 
 const AGENTS = ["categorizer", "analyzer", "forecaster", "advisor", "chat", "digest"];
+
+const THRESHOLDS: { key: "accept_confidence" | "route_confidence" | "guard_confidence"; label: string; hint: string }[] = [
+  { key: "accept_confidence", label: "Act on a decision", hint: "Categories, slots, goal types, CSV columns below this are deferred to rules" },
+  { key: "route_confidence", label: "Answer chat without an LLM", hint: "Lower → more questions answered from tools (cheaper), higher → more go to the LLM" },
+  { key: "guard_confidence", label: "Faithfulness guard", hint: "Minimum P(supported) before LLM-written text is shown" },
+];
+
+function JevCard({ jev }: { jev: JevState }) {
+  const qc = useQueryClient();
+  const [th, setTh] = useState({
+    accept_confidence: jev.accept_confidence,
+    route_confidence: jev.route_confidence,
+    guard_confidence: jev.guard_confidence,
+  });
+  useEffect(
+    () => setTh({ accept_confidence: jev.accept_confidence, route_confidence: jev.route_confidence, guard_confidence: jev.guard_confidence }),
+    [jev.accept_confidence, jev.route_confidence, jev.guard_confidence],
+  );
+  const save = useMutation({
+    mutationFn: (body: Record<string, unknown>) => api.put<JevState>("/settings/decisions", body),
+    onSuccess: () => {
+      toast.success("Decision policy updated");
+      qc.invalidateQueries({ queryKey: ["settings"] });
+      qc.invalidateQueries({ queryKey: ["jev-settings"] });
+      qc.invalidateQueries({ queryKey: ["meta"] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const test = useMutation({
+    mutationFn: () =>
+      api.post<{ ok: boolean; answer?: string; confidence?: number; latency_ms?: number; input_tokens?: number; cost_usd?: number; model?: string; error?: string }>(
+        "/settings/decisions/test",
+      ),
+    onSuccess: (r) =>
+      r.ok
+        ? toast.success(`Jev answered “${r.answer}” (confidence ${r.confidence}) in ${r.latency_ms} ms`, {
+            description: `${r.model} · ${r.input_tokens} input tokens · $${r.cost_usd?.toFixed(7)}`,
+          })
+        : toast.error("Jev connection failed", { description: r.error }),
+  });
+  const dirty = THRESHOLDS.some((t) => Math.abs(th[t.key] - jev[t.key]) > 1e-9);
+  return (
+    <Card>
+      <CardHeader
+        title="System One decisions (Jev)"
+        subtitle="Closed-set judgments — categories, chat routing, faithfulness, goal types — go to TypeSafe's Jev through Mesh POST /v1/evaluate. Same MESH_API_KEY, billed on input tokens only."
+        icon={<Scale className="size-4" />}
+        action={
+          <div className="flex items-center gap-2 text-[13px]">
+            <span className="text-muted">Decisions</span>
+            <Toggle checked={jev.enabled} onChange={(v) => save.mutate({ enabled: v })} label="Enable Jev" />
+          </div>
+        }
+      />
+      <div className="grid gap-5 p-5 lg:grid-cols-[300px_1fr]">
+        <div className="space-y-2 rounded-2xl border border-line p-4 text-[12.5px]">
+          <div className="flex items-center justify-between">
+            <span className="font-semibold">{jev.model}</span>
+            {jev.available ? (
+              <Badge tone="green">
+                <Check className="size-3" /> ready
+              </Badge>
+            ) : (
+              <Badge tone={jev.enabled ? "amber" : "neutral"}>{jev.enabled ? "no key" : "off"}</Badge>
+            )}
+          </div>
+          <div className="break-all font-mono text-[11px] text-muted">{jev.endpoint}</div>
+          <div className="flex items-center gap-1 font-mono text-[11px] text-muted">
+            <KeyRound className="size-3" /> {jev.key_env}
+          </div>
+          <div className="text-muted">${jev.price_in_per_1m}/1M input tokens · output free</div>
+          <Button size="sm" variant="secondary" loading={test.isPending} onClick={() => test.mutate()} className="mt-1 w-full">
+            Test a live decision
+          </Button>
+          <div className="space-y-1.5 pt-2">
+            {jev.used_for.map((u) => (
+              <div key={u.purpose} className="flex items-start justify-between gap-2">
+                <span className="text-ink">{u.purpose.replace(/_/g, " ")}</span>
+                <span className="text-right text-[11px] text-muted">{u.replaces === "—" ? "new check" : `replaces ${u.replaces}`}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="space-y-4">
+          {THRESHOLDS.map((t) => (
+            <div key={t.key}>
+              <div className="flex items-center justify-between text-[13px]">
+                <span className="font-medium">{t.label}</span>
+                <span className="num font-semibold">≥ {th[t.key].toFixed(2)}</span>
+              </div>
+              <input
+                type="range"
+                min={0.2}
+                max={0.95}
+                step={0.05}
+                value={th[t.key]}
+                onChange={(e) => setTh({ ...th, [t.key]: Number(e.target.value) })}
+                className="mt-1 w-full accent-cyan-600"
+              />
+              <div className="text-[11.5px] text-muted">{t.hint}</div>
+            </div>
+          ))}
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-line pt-4 text-[13px]">
+            <div className="flex items-center gap-2">
+              <Toggle checked={jev.order_check} onChange={(v) => save.mutate({ order_check: v })} label="Order-bias check" />
+              <span>
+                Order-bias check <span className="text-muted">(re-ask mid-confidence answers with options reversed)</span>
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Toggle checked={jev.escalate_to_llm} onChange={(v) => save.mutate({ escalate_to_llm: v })} label="Escalate to LLM" />
+              <span>
+                Cascade unsure categories to the LLM <span className="text-muted">(validate with run_eval first)</span>
+              </span>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            {dirty && (
+              <Button size="sm" variant="ghost" onClick={() => setTh({ accept_confidence: jev.accept_confidence, route_confidence: jev.route_confidence, guard_confidence: jev.guard_confidence })}>
+                Reset
+              </Button>
+            )}
+            <Button size="sm" variant="primary" disabled={!dirty} loading={save.isPending} onClick={() => save.mutate(th)}>
+              Save thresholds
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+}
 
 export default function SettingsPage() {
   const qc = useQueryClient();
@@ -73,7 +204,9 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Settings" subtitle="Profile, LLM providers (bring your own), notifications and demo data." />
+      <PageHeader title="Settings" subtitle="Profile, decision model (Jev), LLM providers (bring your own), notifications and demo data." />
+
+      <JevCard jev={data.decisions} />
 
       <Card>
         <CardHeader

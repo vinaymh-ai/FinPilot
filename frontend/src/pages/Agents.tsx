@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Bot, CircleCheck, CircleX, Cpu, GitBranch, Timer } from "lucide-react";
+import { Bot, CircleCheck, CircleX, Cpu, GitBranch, Scale, Timer } from "lucide-react";
 import { useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Badge, Card, CardHeader, Empty, ModelBadge, PageHeader, Skeleton } from "../components/ui";
@@ -10,7 +10,20 @@ import type { AgentRun, RunStep } from "../lib/types";
 
 type RunDetail = {
   run: AgentRun;
-  llm_calls: { agent: string; provider: string; model: string; prompt_tokens: number; completion_tokens: number; latency_ms: number; cached: boolean; success: boolean; error: string | null }[];
+  llm_calls: {
+    agent: string;
+    provider: string;
+    model: string;
+    prompt_tokens: number;
+    completion_tokens: number;
+    latency_ms: number;
+    cached: boolean;
+    success: boolean;
+    error: string | null;
+    kind: "llm" | "jev";
+    purpose: string | null;
+    cost_usd: number | null;
+  }[];
 };
 type Usage = { items: { agent: string; provider: string; model: string; calls: number; prompt_tokens: number; completion_tokens: number; avg_latency_ms: number; cache_hits: number; successes: number }[]; total_calls: number; total_tokens: number };
 
@@ -22,6 +35,12 @@ const GRAPH = [
   { id: "advisor", label: "advise" },
   { id: "digest", label: "digest" },
 ];
+
+function jevCount(s: RunStep): number {
+  const j = s.details?.jev_calls as { count?: number } | unknown[] | undefined;
+  if (!j) return 0;
+  return Array.isArray(j) ? j.length : (j.count ?? 0);
+}
 
 function GraphView({ steps }: { steps: RunStep[] }) {
   const by = Object.fromEntries(steps.map((s) => [s.agent, s]));
@@ -37,7 +56,9 @@ function GraphView({ steps }: { steps: RunStep[] }) {
               <div className="h-px w-5 bg-line" />
               <div className={cn("min-w-[104px] rounded-xl border px-3 py-2 text-center", tone)}>
                 <div className="text-[12.5px] font-semibold">{n.label}</div>
-                <div className="text-[10.5px] text-muted">{s ? `${s.duration_ms} ms${s.llm_calls ? ` · ${s.llm_calls} LLM` : ""}` : i === 5 ? "scheduled only" : "skipped"}</div>
+                <div className="text-[10.5px] text-muted">
+                  {s ? `${s.duration_ms} ms${s.llm_calls ? ` · ${s.llm_calls} LLM` : ""}${jevCount(s) ? ` · ${jevCount(s)} Jev` : ""}` : i === 5 ? "scheduled only" : "skipped"}
+                </div>
               </div>
             </div>
           );
@@ -66,7 +87,7 @@ export default function Agents() {
     <div className="space-y-6">
       <PageHeader
         title="Agents & decision trail"
-        subtitle="A LangGraph coordinator routes work between specialist agents; every step, LLM call and output is recorded."
+        subtitle="A LangGraph coordinator routes work between specialist agents; every step, LLM call, Jev decision and output is recorded."
       />
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {meta?.agents.map((a) => (
@@ -143,6 +164,11 @@ export default function Agents() {
                             <Cpu className="size-3" /> {s.llm_calls} LLM call(s)
                           </Badge>
                         )}
+                        {jevCount(s) > 0 && (
+                          <Badge tone="cyan" title="System One (Jev) decisions made in this step">
+                            <Scale className="size-3" /> {jevCount(s)} Jev decision call(s)
+                          </Badge>
+                        )}
                       </div>
                       <div className="mt-1 text-[13px] text-muted">{s.summary}</div>
                       {s.details && Object.keys(s.details).length > 0 && (
@@ -157,14 +183,16 @@ export default function Agents() {
               </Card>
               {detail.llm_calls.length > 0 && (
                 <Card>
-                  <CardHeader title="LLM calls in this run" />
+                  <CardHeader title="Model calls in this run" subtitle="Generative (LLM) and decision (Jev) calls, with tokens and cost" />
                   <div className="overflow-x-auto p-5 pt-3">
                     <table className="w-full text-[12.5px]">
                       <thead className="text-left text-muted">
                         <tr>
                           <th className="py-1.5 font-medium">Agent</th>
+                          <th className="font-medium">Kind</th>
                           <th className="font-medium">Provider · model</th>
                           <th className="text-right font-medium">Tokens in/out</th>
+                          <th className="text-right font-medium">Cost</th>
                           <th className="text-right font-medium">Latency</th>
                           <th className="text-right font-medium">Status</th>
                         </tr>
@@ -174,11 +202,21 @@ export default function Agents() {
                           <tr key={i} className="border-t border-line">
                             <td className="py-1.5 capitalize">{c.agent}</td>
                             <td>
+                              {c.kind === "jev" ? (
+                                <Badge tone="cyan" title={c.purpose ?? undefined}>
+                                  jev{c.purpose ? ` · ${c.purpose.replace(/_/g, " ")}` : ""}
+                                </Badge>
+                              ) : (
+                                <Badge tone="violet">llm</Badge>
+                              )}
+                            </td>
+                            <td>
                               {c.provider} · {c.model}
                             </td>
                             <td className="num text-right">
                               {c.prompt_tokens}/{c.completion_tokens}
                             </td>
+                            <td className="num text-right">{c.cost_usd != null ? `$${c.cost_usd.toFixed(6)}` : "–"}</td>
                             <td className="num text-right">{c.cached ? "cache" : `${c.latency_ms} ms`}</td>
                             <td className="text-right">{c.success ? <Badge tone="green">ok</Badge> : <Badge tone="red" title={c.error ?? ""}>failed</Badge>}</td>
                           </tr>

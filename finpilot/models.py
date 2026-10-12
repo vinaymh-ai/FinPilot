@@ -150,6 +150,12 @@ class Goal(TimestampMixin, Base):
     priority: Mapped[int] = mapped_column(Integer, default=1)  # 1 = highest
     status: Mapped[str] = mapped_column(String(16), default="active")  # active|achieved|archived
     history: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)  # progress snapshots per run
+    # What kind of goal it is decides how the forecast treats it: a "spend" goal (trip, laptop)
+    # leaves the account at its deadline; a "reserve" goal (emergency fund) stays as savings.
+    goal_type: Mapped[str | None] = mapped_column(String(32))
+    spend_at_deadline: Mapped[bool | None] = mapped_column(Boolean)
+    type_source: Mapped[str | None] = mapped_column(String(16))  # jev | rules | user
+    type_confidence: Mapped[float | None] = mapped_column(Float)
 
 
 class AgentRun(Base):
@@ -204,6 +210,47 @@ class LLMCall(TimestampMixin, Base):
     cached: Mapped[bool] = mapped_column(Boolean, default=False)
     success: Mapped[bool] = mapped_column(Boolean, default=True)
     error: Mapped[str | None] = mapped_column(Text)
+    kind: Mapped[str | None] = mapped_column(String(16), default="llm")  # llm (generative) | jev (decision)
+    purpose: Mapped[str | None] = mapped_column(String(64))  # Jev: merchant_category, chat_route, …
+    cost_usd: Mapped[float | None] = mapped_column(Float)  # estimated from configured prices
+
+
+class Decision(TimestampMixin, Base):
+    """One System One (Jev) judgment and what the code did with it — the decision audit log."""
+
+    __tablename__ = "decisions"
+    __table_args__ = (Index("ix_decision_purpose", "purpose", "id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("agent_runs.id", ondelete="SET NULL"), index=True)
+    agent: Mapped[str] = mapped_column(String(32))
+    purpose: Mapped[str] = mapped_column(String(48))  # merchant_category | chat_route | faithfulness | ...
+    subject: Mapped[str] = mapped_column(String(255))  # what was decided about (merchant, message, …)
+    question: Mapped[str] = mapped_column(String(64))
+    answer: Mapped[str] = mapped_column(String(128))
+    confidence: Mapped[float | None] = mapped_column(Float)
+    probabilities: Mapped[dict[str, float] | None] = mapped_column(JSON)
+    action: Mapped[str] = mapped_column(String(24))  # accepted | deferred | escalated | rejected | overridden
+    model: Mapped[str] = mapped_column(String(64))
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    cached: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class MerchantProfile(TimestampMixin, Base):
+    """What a model decided about a merchant, reused on every later import (pay once per merchant)."""
+
+    __tablename__ = "merchant_profiles"
+    __table_args__ = (UniqueConstraint("user_id", "merchant_key", name="uq_merchant_profile"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    merchant_key: Mapped[str] = mapped_column(String(255))
+    category: Mapped[str] = mapped_column(String(48))
+    confidence: Mapped[float] = mapped_column(Float)
+    payee_type: Mapped[str | None] = mapped_column(String(32))  # business | person | institution
+    service_family: Mapped[str | None] = mapped_column(String(48))  # video_streaming, music_streaming, …
+    source: Mapped[str] = mapped_column(String(16))  # jev | llm
+    probabilities: Mapped[dict[str, float] | None] = mapped_column(JSON)
 
 
 class LLMCache(Base):
@@ -289,6 +336,9 @@ class ChatMessage(TimestampMixin, Base):
     role: Mapped[str] = mapped_column(String(16))  # user|assistant
     content: Mapped[str] = mapped_column(Text)
     trace: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)  # tool calls with args/results
+    route: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON
+    )  # System One routing decision (assistant turns)
 
 
 class AppSetting(Base):

@@ -24,7 +24,7 @@ jobs:
       - name: Tests
         run: pytest -q
       - name: Self-evaluation (deterministic, no API cost)
-        run: python -m evaluation.run_eval --seeds 1 2
+        run: python -m evaluation.run_eval --seeds 1 2 --jev-replay   # Jev rows replay a recorded cassette, if any
 
   frontend:
     runs-on: ubuntu-latest

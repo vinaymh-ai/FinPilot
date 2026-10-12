@@ -62,6 +62,22 @@ def step_call_log() -> Iterator[list[dict[str, Any]]]:
         _step_calls.reset(token)
 
 
+def current_run_id() -> int | None:
+    return _run_id.get()
+
+
+def log_step_call(entry: dict[str, Any]) -> None:
+    """Attach a model call (LLM or Jev) to the agent step that is currently running, if any."""
+    calls = _step_calls.get()
+    if calls is not None:
+        calls.append(entry)
+
+
+def llm_cost_usd(prompt_tokens: int, completion_tokens: int, settings: Settings | None = None) -> float:
+    s = settings or get_settings()
+    return (prompt_tokens * s.llm_price_in_per_1m + completion_tokens * s.llm_price_out_per_1m) / 1e6
+
+
 class LLMError(RuntimeError):
     pass
 
@@ -206,12 +222,15 @@ class LLMRouter:
         temperature: float | None = None,
         max_tokens: int = 1200,
         cache: bool = True,
+        model: str | None = None,
     ) -> LLMResponse:
         if not self.enabled:
             raise LLMUnavailableError("LLM disabled")
         targets = self.targets(agent)
         if not targets:
             raise LLMUnavailableError("no LLM provider configured")
+        if model:  # per-call override on the primary provider (e.g. a cheaper model for simple questions)
+            targets = [(targets[0][0], model)] + targets[1:]
         temp = self.settings.llm_temperature if temperature is None else temperature
         use_cache = cache and self.settings.llm_cache_enabled and not tools and temp <= 0.3
 
@@ -354,10 +373,10 @@ class LLMRouter:
             "latency_ms": resp.latency_ms,
             "cached": resp.cached,
             "success": success,
+            "kind": "llm",
+            "cost_usd": round(llm_cost_usd(resp.prompt_tokens, resp.completion_tokens, self.settings), 8),
         }
-        calls = _step_calls.get()
-        if calls is not None:
-            calls.append(entry)
+        log_step_call(entry)
         from finpilot.db import session_scope
         from finpilot.models import LLMCall
 

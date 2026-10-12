@@ -10,5 +10,6 @@ ignore = ["E501", "B008", "SIM108"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]  # import `finpilot` from the repo root when running bare `pytest` (as CI does)
 addopts = "-q"
 filterwarnings = ["ignore::DeprecationWarning"]

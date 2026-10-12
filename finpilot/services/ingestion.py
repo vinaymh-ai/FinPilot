@@ -20,6 +20,9 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from finpilot.decisions.jev import Evaluation, JevClient, get_jev
+from finpilot.decisions.policy import log_decisions, record
+from finpilot.decisions.spec import csv_column_questions, csv_column_state
 from finpilot.domain.normalize import merchant_key
 from finpilot.domain.taxonomy import CATEGORY_IDS
 from finpilot.models import ImportBatch, Transaction, User
@@ -203,7 +206,74 @@ def _parse_time(raw: str | None) -> dt.time | None:
     return None
 
 
-def parse_csv(content: bytes | str) -> ParseResult:
+def _has_required(mapping: dict[str, str]) -> bool:
+    return {"date", "description"} <= mapping.keys() and bool({"amount", "debit", "credit"} & mapping.keys())
+
+
+def _jev_map_headers(
+    headers: list[str],
+    mapping: dict[str, str],
+    rows: list[dict[str, Any]],
+    *,
+    jev: JevClient | None,
+    use_jev: bool,
+) -> list[tuple[str, str, str]]:
+    """System One reads unmapped headers + sample values; code checks the values fit the role."""
+    client = jev or get_jev()
+    unmapped = [h for h in headers if h and h not in mapping.values()]
+    if not (use_jev and client.available()) or not unmapped or not rows:
+        return []
+
+    def samples(h: str) -> list[str]:
+        vals = [str(r.get(h) or "").strip() for r in rows[:40]]
+        return [v for v in vals if v][:4]
+
+    jobs = [
+        (csv_column_state(h, samples(h), [o for o in headers if o and o != h]), csv_column_questions())
+        for h in unmapped
+    ]
+    evals = client.evaluate_many(jobs, agent="ingestion", purpose="csv_column")
+    best: dict[str, tuple[float, str, Evaluation]] = {}
+    for h, ev in zip(unmapped, evals, strict=True):
+        if not isinstance(ev, Evaluation):
+            continue
+        a = ev["role"]
+        if (
+            a.choice in ("ignore", "reference")
+            or a.choice in mapping
+            or a.confidence < client.accept_confidence
+        ):
+            continue
+        if not _values_fit(a.choice, [str(r.get(h) or "") for r in rows[:200]]):
+            continue  # Jev's guess contradicts the data (e.g. "date" but nothing parses as a date)
+        if a.choice not in best or a.confidence > best[a.choice][0]:
+            best[a.choice] = (a.confidence, h, ev)
+    decisions, out = [], []
+    for role, (conf, h, ev) in best.items():
+        out.append((h, role, f"Jev, confidence {conf:.2f}, values verified"))
+        decisions.append(
+            record(ev, "role", agent="ingestion", purpose="csv_column", subject=h, action="accepted")
+        )
+    log_decisions(decisions)
+    return out
+
+
+def _values_fit(role: str, values: list[str]) -> bool:
+    vals = [v.strip() for v in values if v and v.strip()]
+    if not vals:
+        return False
+    if role == "date":
+        return _detect_date_format(vals) is not None
+    if role in ("amount", "debit", "credit", "balance"):
+        return sum(parse_money(v) is not None for v in vals) >= 0.8 * len(vals)
+    if role == "time":
+        return sum(_parse_time(v) is not None for v in vals) >= 0.8 * len(vals)
+    if role == "description":
+        return sum(bool(re.search(r"[A-Za-z]{3}", v)) for v in vals) >= 0.8 * len(vals)
+    return True
+
+
+def parse_csv(content: bytes | str, *, jev: JevClient | None = None, use_jev: bool = True) -> ParseResult:
     text = content.decode("utf-8-sig", errors="replace") if isinstance(content, bytes) else content
     text = text.strip()
     res = ParseResult()
@@ -225,15 +295,20 @@ def parse_csv(content: bytes | str) -> ParseResult:
     reader = csv.DictReader(io.StringIO("\n".join(lines[start:])), dialect=dialect)
     headers = reader.fieldnames or []
     mapping = _map_headers(headers)
+    raw_rows = list(reader)
+    if not _has_required(mapping):
+        # Unfamiliar export ("Txn Posted On", "Narrative", "Amt in Rs")? Ask System One what each
+        # unmapped column holds, then verify its answer against the actual values in code.
+        for header, role, why in _jev_map_headers(headers, mapping, raw_rows, jev=jev, use_jev=use_jev):
+            mapping[role] = header
+            res.warnings.append(f"Column '{header}' read as {role} ({why})")
     res.mapping = mapping
-    missing = [f for f in ("date", "description") if f not in mapping]
-    if missing or not ({"amount", "debit", "credit"} & mapping.keys()):
+    if not _has_required(mapping):
         res.errors.append(
             f"Could not find required columns (date, description, amount or debit/credit). "
             f"Found headers: {headers}"
         )
         return res
-    raw_rows = list(reader)
     res.total = len(raw_rows)
     fmt = _detect_date_format([r.get(mapping["date"], "") or "" for r in raw_rows[:200]])
     if fmt is None:

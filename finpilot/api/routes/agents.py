@@ -16,7 +16,7 @@ from finpilot.agents.chat import ChatAgent
 from finpilot.agents.coordinator import Coordinator
 from finpilot.api import serializers as ser
 from finpilot.api.deps import current_user_id, get_db
-from finpilot.llm.client import run_context
+from finpilot.llm.client import run_context, step_call_log
 from finpilot.models import AgentRun, AgentStep, ChatMessage, Digest, LLMCall
 from finpilot.schemas import ChatRequest, RunRequest, SchedulerUpdate
 from finpilot.services import repository as repo
@@ -57,6 +57,9 @@ def get_run(
                 "cached": c.cached,
                 "success": c.success,
                 "error": c.error,
+                "kind": c.kind or "llm",
+                "purpose": c.purpose,
+                "cost_usd": c.cost_usd,
             }
             for c in calls
         ],
@@ -96,19 +99,29 @@ def chat(
     db.commit()
     t0 = time.perf_counter()
     started = dt.datetime.now(dt.UTC)
-    with run_context(run.id):
+    with run_context(run.id), step_call_log() as calls:
         try:
             result = ChatAgent().answer(kit, body.message, history)
             run.status = "succeeded"
         except Exception as exc:  # noqa: BLE001
             run.status, run.error = "failed", str(exc)
             result = {"answer": "Sorry — something went wrong answering that.", "trace": [], "model": "error"}
+    route = result.get("route")
     run.finished_at = dt.datetime.now(dt.UTC)
     run.summary = {
         "question": body.message[:200],
         "tools": [t["tool"] for t in result["trace"]],
         "model": result["model"],
+        "route": route and {k: route[k] for k in ("intent", "confidence", "action")},
     }
+    llm_calls = [c for c in calls if c.get("kind") != "jev"]
+    how = f"via {result['model']}"
+    if route:
+        how = (
+            f"routed by Jev as '{route['intent']}' ({route['confidence']:.2f}) → "
+            f"{route['action'].replace('_', ' ')}"
+            + (f" ({route['llm_model']})" if route.get("llm_model") else "")
+        )
     db.add(
         AgentStep(
             run_id=run.id,
@@ -116,9 +129,15 @@ def chat(
             status=run.status,
             started_at=started,
             duration_ms=int((time.perf_counter() - t0) * 1000),
-            summary=f"Answered with {len(result['trace'])} tool call(s) via {result['model']}",
-            details={"trace": result["trace"]},
-            llm_calls=0,
+            summary=f"Answered with {len(result['trace'])} tool call(s), {how}",
+            details={
+                "trace": result["trace"],
+                "route": route,
+                "guard": result.get("guard"),
+                "llm_calls": llm_calls or None,
+                "jev_calls": [c for c in calls if c.get("kind") == "jev"] or None,
+            },
+            llm_calls=len(llm_calls),
             error=run.error,
         )
     )
@@ -129,6 +148,7 @@ def chat(
         role="assistant",
         content=result["answer"],
         trace=result["trace"],
+        route=route,
     )
     db.add(msg)
     db.commit()
@@ -137,6 +157,7 @@ def chat(
         "answer": result["answer"],
         "trace": result["trace"],
         "model": result["model"],
+        "route": route,
         "run_id": run.id,
         "session_id": body.session_id,
     }
@@ -159,6 +180,7 @@ def chat_history(
                 "role": m.role,
                 "content": m.content,
                 "trace": m.trace or [],
+                "route": m.route,
                 "created_at": m.created_at.isoformat() if m.created_at else None,
             }
             for m in rows

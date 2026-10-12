@@ -21,6 +21,7 @@ from typing import Any
 import numpy as np
 
 from finpilot.agents.base import BaseAgent
+from finpilot.decisions.guard import check_faithfulness
 from finpilot.domain.recurring import RecurringCandidate, TxnLite, monthly_equivalent
 from finpilot.domain.stats import month_key, pct_change, robust_z
 from finpilot.domain.taxonomy import DISCRETIONARY, NON_SPEND, label
@@ -774,4 +775,11 @@ class AnalyzerAgent(BaseAgent):
         if not isinstance(bullets, list) or not bullets:
             return fallback, "rules"
         good = [str(b) for b in bullets[:4] if check_grounding(str(b), facts)[0]]
+        verdicts = check_faithfulness(
+            self.jev,
+            [(f"profile bullet {i + 1}", facts, b) for i, b in enumerate(good)],
+            agent=self.name,
+            enabled=self.use_jev,
+        )
+        good = [b for b, v in zip(good, verdicts, strict=True) if v.ok]
         return (good, label_ or "llm") if good else (fallback, "rules")

@@ -23,6 +23,7 @@ export interface Meta {
   categories: Category[];
   agents: AgentCard[];
   llm_enabled: boolean;
+  decisions?: string;
 }
 
 export interface Txn {
@@ -89,6 +90,7 @@ export interface GoalProjection {
   eta: string | null;
   required_monthly: number;
   months_left: number;
+  spend_at_deadline?: boolean;
 }
 
 export interface Goal {
@@ -102,6 +104,10 @@ export interface Goal {
   progress_pct: number;
   history: { date: string; run_id: number; probability: number; shortfall: number; eta: string | null }[];
   projection: GoalProjection | null;
+  goal_type: string | null;
+  spend_at_deadline: boolean | null;
+  type_source: "jev" | "rules" | "user" | null;
+  type_confidence: number | null;
 }
 
 export interface Checkpoint {
@@ -277,13 +283,109 @@ export interface ChatTrace {
   result: unknown;
 }
 
+export interface ChatRoute {
+  intent: string;
+  confidence: number;
+  probabilities: Record<string, number>;
+  slots: { category: string | null; period: string | null; purchase_kind: string | null };
+  complexity: number;
+  complexity_label: string;
+  model: string;
+  input_tokens: number;
+  cost_usd: number;
+  latency_ms: number;
+  cached: boolean;
+  order_checked: boolean;
+  action: "answered_by_rules" | "escalated_to_llm" | "refused" | "fallback_rules" | "pending";
+  llm_model: string | null;
+}
+
 export interface ChatMessage {
   id?: number;
   role: "user" | "assistant";
   content: string;
   trace?: ChatTrace[];
   model?: string;
+  route?: ChatRoute | null;
   pending?: boolean;
+}
+
+export interface DecisionRow {
+  id: number;
+  run_id: number | null;
+  agent: string;
+  purpose: string;
+  subject: string;
+  question: string;
+  answer: string;
+  confidence: number | null;
+  probabilities: Record<string, number>;
+  action: "accepted" | "deferred" | "escalated" | "rejected" | "overridden";
+  model: string;
+  latency_ms: number;
+  cached: boolean;
+  created_at: string | null;
+}
+
+export interface KindUsage {
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+  cache_hits: number;
+  successes: number;
+  avg_latency_ms: number;
+}
+
+export interface SavingsRow {
+  purpose: string;
+  jev_calls: number;
+  jev_input_tokens: number;
+  jev_cost_usd: number;
+  decisions: number;
+  actions: Record<string, number>;
+  replaces_llm: boolean;
+  llm_calls_avoided?: number;
+  llm_equivalent_tokens?: { input: number; output: number };
+  llm_cost_avoided_usd?: number;
+}
+
+export interface DecisionStats {
+  by_kind: Record<string, KindUsage>;
+  decisions: Record<string, { actions: Record<string, number>; total: number; avg_confidence: Record<string, number> }>;
+  savings: {
+    rows: SavingsRow[];
+    llm_cost_avoided_usd: number;
+    jev_cost_replacing_usd: number;
+    net_savings_usd: number;
+    jev_cost_added_checks_usd: number;
+    assumptions: {
+      llm_price_in_per_1m: number;
+      llm_price_out_per_1m: number;
+      jev_price_in_per_1m: number;
+      llm_equivalent_tokens: Record<string, { input: number; output: number }>;
+      note: string;
+    };
+  };
+  decision_model: string;
+}
+
+export interface JevState {
+  enabled: boolean;
+  configured: boolean;
+  available: boolean;
+  provider: "mesh" | "typesafe";
+  model: string;
+  endpoint: string;
+  key_env: string;
+  overrides: Record<string, unknown>;
+  accept_confidence: number;
+  route_confidence: number;
+  guard_confidence: number;
+  escalate_to_llm: boolean;
+  order_check: boolean;
+  price_in_per_1m: number;
+  used_for: { purpose: string; agent: string; replaces: string }[];
 }
 
 export interface ProviderInfo {
@@ -324,5 +426,6 @@ export interface SettingsView {
     digest_enabled: boolean;
   };
   llm: LLMState;
+  decisions: JevState;
   notifications: { email_configured: boolean; telegram_configured: boolean };
 }

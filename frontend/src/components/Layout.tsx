@@ -11,6 +11,7 @@ import {
   Moon,
   Play,
   Receipt,
+  Scale,
   Settings,
   Sparkles,
   Sun,
@@ -33,6 +34,7 @@ const NAV = [
   { to: "/chat", label: "Ask FinPilot", icon: MessageCircle },
   { to: "/digests", label: "Digests", icon: Inbox },
   { to: "/agents", label: "Agents & Trail", icon: Workflow },
+  { to: "/decisions", label: "Decisions (Jev)", icon: Scale },
   { to: "/evaluation", label: "Evaluation", icon: Gauge },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
@@ -104,17 +106,31 @@ export default function Layout({ children }: { children: ReactNode }) {
       <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col gap-6 border-r border-line bg-surface/60 p-4 backdrop-blur lg:flex">
         {brand}
         {nav}
-        <div className="mt-auto rounded-2xl border border-line bg-surface-2/60 p-3 text-[12px] text-muted">
-          <div className="mb-1 flex items-center gap-1.5 font-medium text-ink">
-            <Bot className="size-3.5 text-brand" /> LLM routing
+        <div className="mt-auto space-y-2 rounded-2xl border border-line bg-surface-2/60 p-3 text-[12px] text-muted">
+          <div>
+            <div className="mb-0.5 flex items-center gap-1.5 font-medium text-ink">
+              <Scale className="size-3.5 text-cyan-500" /> Decisions
+            </div>
+            {meta?.decisions && meta.decisions !== "off" ? (
+              <span>
+                Jev via <span className="text-ink">{meta.decisions.split(":")[0]}</span> (System One)
+              </span>
+            ) : (
+              <span>Rules — add a Mesh key to let Jev decide.</span>
+            )}
           </div>
-          {llmAgents.length ? (
-            <span>
-              {llmAgents.length} agents via <span className="text-ink">{llmAgents[0].model.split(":")[0]}</span>
-            </span>
-          ) : (
-            <span>Deterministic mode — add a Mesh key in Settings to enable LLM stages.</span>
-          )}
+          <div>
+            <div className="mb-0.5 flex items-center gap-1.5 font-medium text-ink">
+              <Bot className="size-3.5 text-brand" /> Writing (LLM)
+            </div>
+            {llmAgents.length ? (
+              <span>
+                {llmAgents.length} agents via <span className="text-ink">{llmAgents[0].model.split(":")[0]}</span>
+              </span>
+            ) : (
+              <span>Templates — add a Mesh key to enable LLM stages.</span>
+            )}
+          </div>
         </div>
       </aside>
 

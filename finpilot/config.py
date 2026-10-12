@@ -56,6 +56,33 @@ class Settings(BaseSettings):
     custom_llm_base_url: str | None = None
     custom_llm_api_key: str | None = None
 
+    # --- System One decisions (Jev) ---------------------------------------------------------
+    # Closed-set judgments (which category, which intent, is this rewrite faithful?) go to
+    # TypeSafe's Jev — a decision model that returns calibrated probabilities instead of text.
+    # Default route is Mesh's POST /v1/evaluate, so every AI call still goes through Mesh.
+    jev_enabled: bool = True
+    jev_provider: str = "mesh"  # mesh (POST /v1/evaluate) | typesafe (direct TypeSafe API)
+    jev_model: str = "typesafe/jev-1.13"  # pin the version: the "-latest" alias can change answers
+    jev_timeout_s: float = 20.0
+    jev_max_retries: int = 2
+    jev_max_concurrency: int = 8
+    jev_cache_enabled: bool = True
+    mesh_api_version: str = "2026-08"
+    typesafe_api_key: str | None = None
+    typesafe_base_url: str = "https://api.typesafe.ai/v1"
+    # Confidence policy. Defaults are conservative; tune them on held-out data
+    # (`python -m evaluation.run_eval --jev` reports calibration and a suggested threshold).
+    jev_accept_confidence: float = 0.5  # act on a Choice at/above this confidence
+    jev_route_confidence: float = 0.6  # chat router answers without an LLM at/above this
+    jev_guard_confidence: float = 0.6  # faithfulness guard needs this much certainty to accept LLM text
+    jev_order_check: bool = True  # re-ask mid-confidence answers with options reversed (order bias)
+    categorizer_escalate_to_llm: bool = False  # cascade low-confidence answers to the LLM (validate first)
+    chat_fast_model: str | None = None  # LLM for simple escalated questions (Jev complexity score)
+    # Prices used only for cost reporting (USD per 1M tokens)
+    jev_price_in_per_1m: float = 0.042
+    llm_price_in_per_1m: float = 0.15
+    llm_price_out_per_1m: float = 0.60
+
     # --- Finance defaults -------------------------------------------------------------------
     currency: str = "INR"
     timezone: str = "Asia/Kolkata"
