@@ -1,5 +1,6 @@
 # One-click deploy on Render's free tier: New → Blueprint → point at this repo.
-# Free instances sleep when idle and have an ephemeral disk; the demo account is re-seeded on boot.
+# Free instances sleep when idle and have an ephemeral disk: accounts and data reset on restart unless
+# DATABASE_URL points at a hosted Postgres (Neon / Supabase free tiers). Visitors use "Try the demo".
 services:
   - type: web
     name: finpilot
@@ -15,3 +16,10 @@ services:
         value: "true"
       - key: SCHEDULER_ENABLED
         value: "true"
+      - key: AUTH_ENABLED
+        value: "true"
+      - key: ADMIN_EMAILS
+        sync: false
+      # Render's proxy sets X-Forwarded-For/-Proto: trust it so rate limits and Secure cookies see the client
+      - key: FORWARDED_ALLOW_IPS
+        value: "*"

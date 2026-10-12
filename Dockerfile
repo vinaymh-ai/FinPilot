@@ -13,7 +13,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     DATABASE_URL=sqlite:////data/finpilot.db \
     FRONTEND_DIST=/app/frontend/dist \
-    LOG_JSON=true
+    LOG_JSON=true \
+    LOG_FILE=/data/logs/finpilot.log
 WORKDIR /app
 COPY requirements.txt ./
 RUN pip install -r requirements.txt

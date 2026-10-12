@@ -19,12 +19,17 @@ function authHeaders(): Record<string, string> {
   }
 }
 
+/** Fired when the session is missing or expired, so the app can show the sign-in screen. */
+export const UNAUTHENTICATED_EVENT = "finpilot:unauthenticated";
+
 async function request<T>(method: string, path: string, body?: unknown, isForm = false): Promise<T> {
-  const headers: Record<string, string> = { ...authHeaders() };
+  // X-Requested-With is the server's CSRF check for cookie-authenticated writes.
+  const headers: Record<string, string> = { "X-Requested-With": "FinPilot", ...authHeaders() };
   if (body !== undefined && !isForm) headers["Content-Type"] = "application/json";
   const res = await fetch(`/api${path}`, {
     method,
     headers,
+    credentials: "same-origin",
     body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
   });
   if (res.status === 204) return undefined as T;
@@ -37,8 +42,12 @@ async function request<T>(method: string, path: string, body?: unknown, isForm =
   }
   if (!res.ok) {
     const detail = data?.detail ?? data;
-    const msg =
-      typeof detail === "string" ? detail : detail?.message ?? `Request failed (${res.status})`;
+    let msg = typeof detail === "string" ? detail : detail?.message ?? `Request failed (${res.status})`;
+    const requestId = detail?.request_id ?? res.headers.get("x-request-id");
+    if (res.status >= 500 && requestId) msg = `${msg} (request id ${requestId})`;
+    if (res.status === 401 && detail?.code === "not_authenticated" && !path.startsWith("/auth/")) {
+      window.dispatchEvent(new Event(UNAUTHENTICATED_EVENT));
+    }
     throw new ApiError(res.status, msg, detail);
   }
   return data as T;

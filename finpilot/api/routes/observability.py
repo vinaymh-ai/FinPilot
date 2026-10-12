@@ -194,7 +194,13 @@ def list_calls(
         stmt = stmt.where(LLMCall.request_id == request_id)
     if q:
         like = f"%{q[:100]}%"
-        stmt = stmt.where(LLMCall.model.ilike(like) | LLMCall.purpose.ilike(like) | LLMCall.error.ilike(like))
+        stmt = stmt.where(
+            LLMCall.model.ilike(like)
+            | LLMCall.purpose.ilike(like)
+            | LLMCall.agent.ilike(like)
+            | LLMCall.error.ilike(like)
+            | (LLMCall.request_id == q.strip())
+        )
     if before_id:
         stmt = stmt.where(LLMCall.id < before_id)
     limit = min(max(limit, 1), 200)

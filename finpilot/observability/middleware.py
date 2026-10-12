@@ -34,10 +34,13 @@ class RequestContextMiddleware:
         scope.setdefault("state", {})["request_id"] = rid
         token = request_id_var.set(rid)
         start = time.perf_counter()
+        finished: float | None = None  # response fully sent (background tasks may run after it)
         status = 500
 
         async def send_wrapper(message: Message) -> None:
-            nonlocal status
+            nonlocal status, finished
+            if message["type"] == "http.response.body" and not message.get("more_body", False):
+                finished = time.perf_counter()
             if message["type"] == "http.response.start":
                 status = message["status"]
                 h = MutableHeaders(scope=message)
@@ -54,7 +57,7 @@ class RequestContextMiddleware:
         finally:
             path = scope.get("path", "")
             if path.startswith("/api") or status >= 400:
-                duration = round((time.perf_counter() - start) * 1000, 1)
+                duration = round(((finished or time.perf_counter()) - start) * 1000, 1)
                 level = logging.ERROR if status >= 500 else logging.WARNING if status >= 400 else logging.INFO
                 if path in QUIET_PATHS and status < 400:
                     level = logging.DEBUG

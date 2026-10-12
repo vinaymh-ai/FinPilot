@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -134,6 +134,12 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @field_validator("cookie_secure", "safety_buffer", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, v: object) -> object:
+        # `COOKIE_SECURE=` in a .env means "not set", not an invalid boolean
+        return None if isinstance(v, str) and not v.strip() else v
 
     @property
     def admin_email_list(self) -> list[str]:

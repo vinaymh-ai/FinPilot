@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
   Brain,
@@ -11,20 +11,31 @@ import {
   Target,
   TrendingDown,
   TrendingUp,
+  Upload,
   Wallet,
 } from "lucide-react";
+import { toast } from "sonner";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { CashflowChart, DonutChart, ForecastChart } from "../components/charts";
 import { DecisionTrail, GoalMini, InsightRow, RecommendationCard } from "../components/domain";
-import { Badge, Button, Card, CardHeader, Empty, ModelBadge, Skeleton, Stat } from "../components/ui";
+import { Badge, Button, Card, CardHeader, Empty, ModelBadge, Skeleton, Spinner, Stat } from "../components/ui";
 import { api } from "../lib/api";
 import { date, dateTime, money, pct } from "../lib/format";
-import { useCategories, useRunAgents } from "../lib/hooks";
+import { useCategories, useRefreshAll, useRunAgents } from "../lib/hooks";
 import type { Dashboard, Recommendation } from "../lib/types";
 
 export default function Overview() {
-  const { data, isLoading } = useQuery({ queryKey: ["dashboard"], queryFn: () => api.get<Dashboard>("/dashboard") });
+  const { data, isLoading } = useQuery({
+    queryKey: ["dashboard"],
+    queryFn: () => api.get<Dashboard>("/dashboard"),
+    // While the agents analyse new data (a fresh demo, a just-uploaded statement) keep the view live.
+    refetchInterval: (q) => {
+      const d = q.state.data;
+      const waiting = d && (d.analysis_running || (d.overview.transactions > 0 && !d.last_run));
+      return waiting && q.state.dataUpdateCount < 60 ? 3000 : false;
+    },
+  });
   const cats = useCategories();
   const run = useRunAgents();
   const [open, setOpen] = useState<Recommendation | null>(null);
@@ -44,14 +55,7 @@ export default function Overview() {
 
   const o = data.overview;
   const fc = data.forecast;
-  if (!o.transactions)
-    return (
-      <Card>
-        <Empty icon={<Wallet className="size-6" />} title="No transactions yet">
-          Upload a bank statement CSV on the Transactions page, or load the demo account from Settings.
-        </Empty>
-      </Card>
-    );
+  if (!o.transactions) return <GetStarted />;
 
   const top = data.recommendations[0];
   const rate = o.last_30_days.savings_rate_pct;
@@ -76,7 +80,14 @@ export default function Overview() {
               <Sparkles className="size-4" /> This week's key insight
             </div>
             <h2 className="mt-2 text-xl font-semibold leading-snug tracking-tight sm:text-2xl">
-              {data.headline ?? "Run the agents to get your first insight."}
+              {data.headline ??
+                (data.analysis_running ? (
+                  <span className="inline-flex items-center gap-2">
+                    <Spinner className="size-5" /> Your agents are analysing these transactions…
+                  </span>
+                ) : (
+                  "Run the agents to get your first insight."
+                ))}
             </h2>
             {fc?.narrative && (
               <p className="mt-2 max-w-3xl text-[14px] leading-relaxed text-muted">
@@ -291,5 +302,34 @@ export default function Overview() {
       )}
       <DecisionTrail rec={open} onClose={() => setOpen(null)} />
     </div>
+  );
+}
+
+function GetStarted() {
+  const refresh = useRefreshAll();
+  const sample = useMutation({
+    mutationFn: () => api.post("/demo/reset", { persona: "young_professional" }),
+    onSuccess: () => {
+      toast.success("Sample data loaded and analysed");
+      refresh();
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  return (
+    <Card>
+      <Empty icon={<Wallet className="size-6" />} title="No transactions yet">
+        <p>Upload a bank statement — CSV, Excel or PDF from any bank — and the agents will categorise, analyse and forecast it.</p>
+        <div className="mt-4 flex flex-wrap justify-center gap-2">
+          <Link to="/transactions">
+            <Button variant="primary">
+              <Upload className="size-4" /> Upload a statement
+            </Button>
+          </Link>
+          <Button loading={sample.isPending} onClick={() => sample.mutate()}>
+            <Sparkles className="size-4" /> Explore with sample data
+          </Button>
+        </div>
+      </Empty>
+    </Card>
   );
 }

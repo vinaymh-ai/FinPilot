@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -84,6 +84,7 @@ def auth_config() -> dict[str, Any]:
         "auth_enabled": s.auth_enabled,
         "allow_signup": s.allow_signup,
         "demo_accounts": s.demo_accounts,
+        "demo_ttl_hours": s.demo_ttl_hours,
         "password_min_length": s.password_min_length,
         "password_reset_by_email": bool(s.smtp_host and s.smtp_user and s.smtp_password),
     }
@@ -125,6 +126,8 @@ def start_demo(request: Request, background: BackgroundTasks) -> JSONResponse:
     ip = _client_ip(request)
     try:
         auth.throttle(f"demo:ip:{ip}", 10, 3600)
+        # each demo runs the agents (model spend): cap creation server-wide too
+        auth.throttle("demo:all", 120, 3600)
         with session_scope() as db:
             user = auth.create_demo_user(db)
             token = auth.create_session(db, user, user_agent=request.headers.get("user-agent"), ip=ip)
@@ -231,6 +234,18 @@ def _auth_mode_only() -> None:
                 "code": "auth_disabled",
             },
         )
+
+
+@public.get("/session")
+async def current_session(
+    request: Request, authorization: str | None = Header(default=None)
+) -> dict[str, Any]:
+    """Who is signed in, or `user: null` — lets the app check without a 401 on every visit."""
+    try:
+        principal = await current_principal(request, authorization)
+    except HTTPException:
+        return {"user": None, "auth_enabled": get_settings().auth_enabled, "demo_expires_hours": None}
+    return await run_in_threadpool(me, principal)
 
 
 # ---------------------------------------------------------------------------- signed in

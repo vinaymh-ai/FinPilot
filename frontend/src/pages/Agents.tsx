@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { Bot, CircleCheck, CircleX, Cpu, GitBranch, Scale, Timer } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { CallDrawer } from "../components/CallDrawer";
 import { Badge, Card, CardHeader, Empty, ModelBadge, PageHeader, Skeleton } from "../components/ui";
 import { api } from "../lib/api";
 import { cn, dateTime } from "../lib/format";
@@ -11,6 +12,7 @@ import type { AgentRun, RunStep } from "../lib/types";
 type RunDetail = {
   run: AgentRun;
   llm_calls: {
+    id: number;
     agent: string;
     provider: string;
     model: string;
@@ -72,6 +74,7 @@ function GraphView({ steps }: { steps: RunStep[] }) {
 
 export default function Agents() {
   const [params, setParams] = useSearchParams();
+  const [openCall, setOpenCall] = useState<number | null>(null);
   const { data: meta } = useMeta();
   const { data: runs } = useQuery({ queryKey: ["runs"], queryFn: () => api.get<{ runs: AgentRun[] }>("/runs?limit=40") });
   const { data: usage } = useQuery({ queryKey: ["llm-usage"], queryFn: () => api.get<Usage>("/llm/usage") });
@@ -183,7 +186,7 @@ export default function Agents() {
               </Card>
               {detail.llm_calls.length > 0 && (
                 <Card>
-                  <CardHeader title="Model calls in this run" subtitle="Generative (LLM) and decision (Jev) calls, with tokens and cost" />
+                  <CardHeader title="Model calls in this run" subtitle="Generative (LLM) and decision (Jev) calls, with tokens and cost — click a row for the raw prompt and response" />
                   <div className="overflow-x-auto p-5 pt-3">
                     <table className="w-full text-[12.5px]">
                       <thead className="text-left text-muted">
@@ -199,7 +202,7 @@ export default function Agents() {
                       </thead>
                       <tbody>
                         {detail.llm_calls.map((c, i) => (
-                          <tr key={i} className="border-t border-line">
+                          <tr key={i} onClick={() => setOpenCall(c.id)} className="cursor-pointer border-t border-line hover:bg-surface-2/60">
                             <td className="py-1.5 capitalize">{c.agent}</td>
                             <td>
                               {c.kind === "jev" ? (
@@ -265,6 +268,7 @@ export default function Agents() {
           </Card>
         </div>
       </div>
+      <CallDrawer callId={openCall} onClose={() => setOpenCall(null)} />
     </div>
   );
 }

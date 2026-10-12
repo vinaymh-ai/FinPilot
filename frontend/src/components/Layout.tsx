@@ -1,4 +1,5 @@
 import {
+  Activity,
   Bot,
   Compass,
   FlaskConical,
@@ -6,6 +7,7 @@ import {
   Inbox,
   LayoutDashboard,
   Lightbulb,
+  LogOut,
   Menu,
   MessageCircle,
   Moon,
@@ -19,10 +21,11 @@ import {
   Workflow,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
-import { NavLink, useLocation } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { useAuth } from "../lib/auth";
 import { cn } from "../lib/format";
 import { useMeta, useRunAgents } from "../lib/hooks";
-import { Button } from "./ui";
+import { Badge, Button } from "./ui";
 
 const NAV = [
   { to: "/", label: "Overview", icon: LayoutDashboard },
@@ -36,6 +39,7 @@ const NAV = [
   { to: "/agents", label: "Agents & Trail", icon: Workflow },
   { to: "/decisions", label: "Decisions (Jev)", icon: Scale },
   { to: "/evaluation", label: "Evaluation", icon: Gauge },
+  { to: "/observability", label: "Observability", icon: Activity },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
@@ -52,6 +56,70 @@ function useTheme() {
     setDark(next);
   };
   return { dark, toggle };
+}
+
+function initials(name: string | undefined) {
+  const parts = (name ?? "").trim().split(/\s+/).filter(Boolean);
+  return (parts.length ? parts.slice(0, 2).map((p) => p[0]) : ["?"]).join("").toUpperCase();
+}
+
+function AccountPanel({ compact = false }: { compact?: boolean }) {
+  const { user, authEnabled, signOut } = useAuth();
+  const navigate = useNavigate();
+  if (!authEnabled || !user) return null;
+  return (
+    <div className={cn("flex items-center gap-2.5", compact ? "" : "rounded-2xl border border-line bg-surface-2/60 p-2.5")}>
+      <div className="grid size-8 shrink-0 place-items-center rounded-full bg-gradient-to-br from-emerald-400 to-indigo-500 text-[12px] font-semibold text-white">
+        {initials(user.name)}
+      </div>
+      {!compact && (
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 text-[13px] font-medium">
+            <span className="min-w-0 truncate">{user.name}</span>
+            {user.is_demo && <Badge tone="amber" className="shrink-0">demo</Badge>}
+            {user.is_admin && !user.is_demo && <Badge tone="violet" className="shrink-0">admin</Badge>}
+          </div>
+          <div className="truncate text-[11.5px] text-muted">{user.is_demo ? "Temporary sandbox" : user.email}</div>
+        </div>
+      )}
+      <Button
+        variant="ghost"
+        size="sm"
+        aria-label="Sign out"
+        title="Sign out"
+        onClick={async () => {
+          await signOut();
+          navigate("/login", { replace: true });
+        }}
+      >
+        <LogOut className="size-4" />
+      </Button>
+    </div>
+  );
+}
+
+function DemoBanner() {
+  const { user, signOut, config } = useAuth();
+  const navigate = useNavigate();
+  if (!user?.is_demo) return null;
+  return (
+    <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 border-b border-amber-500/20 bg-amber-500/10 px-4 py-2 text-center text-[12.5px] text-amber-700 dark:text-amber-300">
+      <span>
+        You're exploring a private demo account with sample data — it's deleted after {config?.demo_ttl_hours ?? 48} hours.
+      </span>
+      {config?.allow_signup && (
+        <button
+          className="font-semibold underline underline-offset-2"
+          onClick={async () => {
+            await signOut();
+            navigate("/signup", { replace: true });
+          }}
+        >
+          Create your own account
+        </button>
+      )}
+    </div>
+  );
 }
 
 export default function Layout({ children }: { children: ReactNode }) {
@@ -106,7 +174,8 @@ export default function Layout({ children }: { children: ReactNode }) {
       <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col gap-6 border-r border-line bg-surface/60 p-4 backdrop-blur lg:flex">
         {brand}
         {nav}
-        <div className="mt-auto space-y-2 rounded-2xl border border-line bg-surface-2/60 p-3 text-[12px] text-muted">
+        <div className="mt-auto space-y-3">
+        <div className="space-y-2 rounded-2xl border border-line bg-surface-2/60 p-3 text-[12px] text-muted">
           <div>
             <div className="mb-0.5 flex items-center gap-1.5 font-medium text-ink">
               <Scale className="size-3.5 text-cyan-500" /> Decisions
@@ -132,6 +201,8 @@ export default function Layout({ children }: { children: ReactNode }) {
             )}
           </div>
         </div>
+        <AccountPanel />
+        </div>
       </aside>
 
       {/* mobile drawer */}
@@ -141,11 +212,15 @@ export default function Layout({ children }: { children: ReactNode }) {
           <aside className="absolute left-0 top-0 flex h-full w-72 flex-col gap-6 border-r border-line bg-surface p-4">
             {brand}
             {nav}
+            <div className="mt-auto">
+              <AccountPanel />
+            </div>
           </aside>
         </div>
       )}
 
       <div className="flex min-w-0 flex-1 flex-col">
+        <DemoBanner />
         <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-line bg-canvas/80 px-4 backdrop-blur sm:px-6">
           <Button variant="ghost" size="sm" className="lg:hidden" onClick={() => setOpen(true)} aria-label="Menu">
             <Menu className="size-5" />

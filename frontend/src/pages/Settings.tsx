@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Check, Database, KeyRound, Plug, Scale, User, Zap } from "lucide-react";
+import { Bot, Check, Database, KeyRound, Lock, LogOut, Plug, Scale, ShieldCheck, Trash2, User, Zap } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Badge, Button, Card, CardHeader, Input, Label, PageHeader, Select, Skeleton, Toggle } from "../components/ui";
 import { api } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { cn, money } from "../lib/format";
 import { useRefreshAll } from "../lib/hooks";
 import type { JevState, LLMState, SettingsView } from "../lib/types";
@@ -141,7 +143,148 @@ function JevCard({ jev }: { jev: JevState }) {
   );
 }
 
+function AccountCard() {
+  const { user, signOut } = useAuth();
+  const navigate = useNavigate();
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [confirmPw, setConfirmPw] = useState("");
+  const change = useMutation({
+    mutationFn: () => api.post("/auth/password/change", { current_password: current, new_password: next }),
+    onSuccess: () => {
+      toast.success("Password changed — other devices were signed out");
+      setCurrent("");
+      setNext("");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const others = useMutation({
+    mutationFn: () => api.post("/auth/sessions/revoke-others"),
+    onSuccess: () => toast.success("Signed out of every other device"),
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const remove = useMutation({
+    mutationFn: () => api.post("/auth/account/delete", { password: confirmPw || null }),
+    onSuccess: async () => {
+      toast.success("Your account and all of its data were deleted");
+      await signOut();
+      navigate("/login", { replace: true });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  if (!user) return null;
+  return (
+    <Card>
+      <CardHeader
+        title="Account"
+        icon={<ShieldCheck className="size-4" />}
+        subtitle={user.is_demo ? "A temporary demo sandbox — it and its data are deleted automatically." : "Your sign-in and security."}
+        action={
+          <Button
+            size="sm"
+            onClick={async () => {
+              await signOut();
+              navigate("/login", { replace: true });
+            }}
+          >
+            <LogOut className="size-4" /> Sign out
+          </Button>
+        }
+      />
+      <div className="grid gap-5 p-5 lg:grid-cols-3">
+        <div className="space-y-1 text-[13px]">
+          <div className="flex items-center gap-2 font-medium">
+            {user.is_demo ? "Demo account" : user.email}
+            {user.is_admin && !user.is_demo && <Badge tone="violet">admin</Badge>}
+            {user.is_demo && <Badge tone="amber">demo</Badge>}
+          </div>
+          {user.created_at && <div className="text-muted">Member since {new Date(user.created_at).toLocaleDateString()}</div>}
+          {user.last_login_at && <div className="text-muted">Last sign-in {new Date(user.last_login_at).toLocaleString()}</div>}
+          <Button size="sm" variant="ghost" className="-ml-3 mt-1" loading={others.isPending} onClick={() => others.mutate()}>
+            Sign out other devices
+          </Button>
+        </div>
+        {!user.is_demo ? (
+          <form
+            className="space-y-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              change.mutate();
+            }}
+          >
+            <div className="flex items-center gap-1.5 text-[13px] font-medium">
+              <Lock className="size-3.5" /> Change password
+            </div>
+            <Input type="password" autoComplete="current-password" placeholder="Current password" value={current} onChange={(e) => setCurrent(e.target.value)} />
+            <Input type="password" autoComplete="new-password" placeholder="New password" value={next} onChange={(e) => setNext(e.target.value)} />
+            <Button size="sm" type="submit" loading={change.isPending} disabled={!current || !next}>
+              Update password
+            </Button>
+          </form>
+        ) : (
+          <div className="text-[13px] text-muted">Demo accounts have no password. Create a real account to keep your own data.</div>
+        )}
+        <div className="space-y-2">
+          <div className="flex items-center gap-1.5 text-[13px] font-medium text-red-500">
+            <Trash2 className="size-3.5" /> Delete account
+          </div>
+          <p className="text-[12.5px] text-muted">Permanently removes your transactions, goals, analyses, chats and model-call history.</p>
+          {!deleting ? (
+            <Button size="sm" variant="danger" onClick={() => setDeleting(true)}>
+              Delete my account…
+            </Button>
+          ) : (
+            <form
+              className="space-y-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                remove.mutate();
+              }}
+            >
+              {!user.is_demo && (
+                <Input type="password" autoComplete="current-password" placeholder="Confirm with your password" value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} />
+              )}
+              <div className="flex gap-2">
+                <Button size="sm" variant="danger" type="submit" loading={remove.isPending} disabled={!user.is_demo && !confirmPw}>
+                  Delete permanently
+                </Button>
+                <Button size="sm" variant="ghost" type="button" onClick={() => (setDeleting(false), setConfirmPw(""))}>
+                  Cancel
+                </Button>
+              </div>
+            </form>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function ManagedNotice({ data }: { data: SettingsView }) {
+  const resolved = Object.entries(data.llm.agents).find(([, v]) => v.resolved !== "rules")?.[1]?.resolved;
+  return (
+    <Card className="p-5">
+      <div className="flex items-start gap-3">
+        <div className="grid size-8 shrink-0 place-items-center rounded-lg bg-surface-2 text-brand">
+          <Plug className="size-4" />
+        </div>
+        <div className="text-[13px]">
+          <div className="font-semibold">Models are managed by the server administrator</div>
+          <p className="mt-0.5 text-muted">
+            Decisions: <span className="text-ink">{data.decisions.available ? data.decisions.model : "rules"}</span> · Writing:{" "}
+            <span className="text-ink">{data.llm.enabled && resolved ? resolved : "templates"}</span>. Provider keys, routing and thresholds apply to
+            every account on this server, so only an admin can change them.
+          </p>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 export default function SettingsPage() {
+  const { user, authEnabled } = useAuth();
+  const isAdmin = !!user?.is_admin;
   const qc = useQueryClient();
   const refresh = useRefreshAll();
   const { data, isLoading } = useQuery({ queryKey: ["settings"], queryFn: () => api.get<SettingsView>("/settings") });
@@ -204,10 +347,13 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Settings" subtitle="Profile, decision model (Jev), LLM providers (bring your own), notifications and demo data." />
+      <PageHeader title="Settings" subtitle="Account, profile, decision model (Jev), LLM providers (bring your own), notifications and demo data." />
 
-      <JevCard jev={data.decisions} />
+      {authEnabled && <AccountCard />}
 
+      {isAdmin ? <JevCard jev={data.decisions} /> : <ManagedNotice data={data} />}
+
+      {isAdmin && (
       <Card>
         <CardHeader
           title="LLM providers"
@@ -327,6 +473,7 @@ export default function SettingsPage() {
           </div>
         </div>
       </Card>
+      )}
 
       <div className="grid gap-6 xl:grid-cols-2">
         <Card>
@@ -383,13 +530,15 @@ export default function SettingsPage() {
               </Button>
             </div>
           </Card>
-          <Card>
-            <CardHeader title="API token" icon={<KeyRound className="size-4" />} subtitle="Only needed if the server sets API_TOKEN." />
-            <div className="flex gap-2 p-5">
-              <Input type="password" value={token} placeholder="Bearer token" onChange={(e) => setToken(e.target.value)} />
-              <Button onClick={() => (api.setToken(token), toast.success("Token stored in this browser"), refresh())}>Save</Button>
-            </div>
-          </Card>
+          {!authEnabled && (
+            <Card>
+              <CardHeader title="API token" icon={<KeyRound className="size-4" />} subtitle="Only needed if the server sets API_TOKEN (single-user mode)." />
+              <div className="flex gap-2 p-5">
+                <Input type="password" value={token} placeholder="Bearer token" onChange={(e) => setToken(e.target.value)} />
+                <Button onClick={() => (api.setToken(token), toast.success("Token stored in this browser"), refresh())}>Save</Button>
+              </div>
+            </Card>
+          )}
           <Card className="p-5 text-[12.5px] text-muted">
             Balance shown in the app: <b className="num text-ink">{money(profile.current_balance)}</b>. Fallback providers
             (tried in order if the primary fails): {llm.fallback_providers.length ? llm.fallback_providers.join(", ") : "none — set LLM_FALLBACK_PROVIDERS"}.

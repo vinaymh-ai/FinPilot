@@ -70,6 +70,7 @@ def test_signup_sign_in_sign_out(app):
     assert "httponly" in cookie and "samesite=lax" in cookie and "finpilot_session=" in cookie
 
     assert c.get("/api/auth/me").json()["user"]["email"] == "asha@example.com"
+    assert c.get("/api/auth/session").json()["user"]["email"] == "asha@example.com"
     assert c.get("/api/dashboard").status_code == 200
 
     assert c.post("/api/auth/logout").json()["ok"]
@@ -87,6 +88,11 @@ def test_signup_sign_in_sign_out(app):
 def test_unauthenticated_requests_are_rejected_but_public_endpoints_work(app):
     c = browser(app)
     assert c.get("/api/health").status_code == 200
+    assert c.get("/api/auth/session").json() == {
+        "user": None,
+        "auth_enabled": True,
+        "demo_expires_hours": None,
+    }
     assert c.get("/api/auth/config").json()["auth_enabled"] is True
     for path in ("/api/dashboard", "/api/transactions", "/api/observability/calls", "/api/graph"):
         r = c.get(path)
@@ -328,3 +334,20 @@ def test_single_user_mode_needs_no_login():
             c.post("/api/auth/login", json={"email": "a@b.co", "password": PASSWORD}, headers=XHR).status_code
             == 404
         )
+
+
+def test_simultaneous_first_signups_cannot_both_claim_or_both_be_admin(accounts, seeded):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from finpilot.db import session_scope
+
+    def one(email):
+        with session_scope() as db:
+            u = auth.signup(db, email, PASSWORD)
+            return u.id, bool(u.is_admin)
+
+    with ThreadPoolExecutor(4) as pool:
+        results = list(pool.map(one, [f"user{i}@example.com" for i in range(4)]))
+    ids = [r[0] for r in results]
+    assert len(set(ids)) == 4 and ids.count(1) == 1
+    assert sum(admin for _, admin in results) == 1

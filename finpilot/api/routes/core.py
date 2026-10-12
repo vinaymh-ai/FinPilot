@@ -107,6 +107,26 @@ def graph() -> dict[str, Any]:
     return {"mermaid": Coordinator.mermaid()}
 
 
+def _analysis_running(db: Session, uid: int) -> bool:
+    """A pipeline run in progress (ignoring ones stuck for over 15 minutes, e.g. after a crash)."""
+    from finpilot.models import AgentRun
+
+    cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(minutes=15)
+    return (
+        db.scalar(
+            select(AgentRun.id)
+            .where(
+                AgentRun.user_id == uid,
+                AgentRun.graph == "pipeline",
+                AgentRun.status == "running",
+                AgentRun.started_at >= cutoff,
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
 @router.get("/dashboard")
 def dashboard(uid: int = Depends(current_user_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     kit = FinanceToolkit(db, uid)
@@ -152,6 +172,7 @@ def dashboard(uid: int = Depends(current_user_id), db: Session = Depends(get_db)
         "headline": (run.summary or {}).get("headline") if run else None,
         "profile": (analysis or {}).get("profile", []),
         "last_run": ser.run(run) if run else None,
+        "analysis_running": _analysis_running(db, uid),
         "latest_digest": ser.digest(latest_digest) if latest_digest else None,
         "goals": [
             ser.goal(g) for g in db.scalars(select(Goal).where(Goal.user_id == uid, Goal.status == "active"))

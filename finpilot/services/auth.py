@@ -27,7 +27,8 @@ import time
 from collections import deque
 from dataclasses import dataclass
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from finpilot.config import get_settings
@@ -185,6 +186,9 @@ def _legacy_owner(db: Session) -> User | None:
     return user
 
 
+_signup_lock = threading.Lock()
+
+
 def signup(db: Session, email: str, password: str, name: str | None = None) -> User:
     s = get_settings()
     if not s.allow_signup:
@@ -193,24 +197,56 @@ def signup(db: Session, email: str, password: str, name: str | None = None) -> U
     if email.endswith("@" + DEMO_DOMAIN):
         raise AuthError("That e-mail domain is reserved.", code="invalid_email")
     check_password_strength(password, email)
-    if db.scalar(select(User).where(func.lower(User.email) == email)) is not None:
-        raise AuthError(
-            "An account with this e-mail already exists. Sign in instead.", status=409, code="exists"
-        )
-    first = _credentialed_users(db) == 0
-    user = _legacy_owner(db) if first else None
-    claimed = user is not None
-    if user is None:
-        user = User(name=(name or email.split("@")[0])[:120], currency=s.currency, current_balance=0.0)
-        db.add(user)
-    elif name:
-        user.name = name[:120]
-    user.email = email
-    user.password_hash = hash_password(password)
-    user.is_admin = _is_admin_email(email) or (first and not s.admin_email_list)
-    user.is_demo = False
-    user.disabled = False
-    db.commit()
+    pw_hash = hash_password(password)  # slow on purpose; done before taking the lock
+    exists = AuthError(
+        "An account with this e-mail already exists. Sign in instead.", status=409, code="exists"
+    )
+    # Serialised so two simultaneous first sign-ups cannot both become admin or both claim the
+    # single-user data; the unique e-mail index and the conditional UPDATE also hold across processes.
+    with _signup_lock:
+        if db.scalar(select(User.id).where(func.lower(User.email) == email)) is not None:
+            raise exists
+        first = _credentialed_users(db) == 0
+        admin = _is_admin_email(email) or (first and not s.admin_email_list)
+        claimed = False
+        if first and _legacy_owner(db) is not None:
+            values: dict[str, object] = {
+                "email": email,
+                "password_hash": pw_hash,
+                "is_admin": admin,
+                "is_demo": False,
+                "disabled": False,
+            }
+            if name:
+                values["name"] = name[:120]
+            res = db.execute(
+                update(User)
+                .where(
+                    User.id == repo.DEFAULT_USER_ID, User.password_hash.is_(None), User.is_demo.is_not(True)
+                )
+                .values(**values)
+            )
+            claimed = res.rowcount == 1
+        try:
+            if claimed:
+                db.commit()
+                user = db.get(User, repo.DEFAULT_USER_ID)
+                assert user is not None
+                db.refresh(user)
+            else:
+                user = User(
+                    name=(name or email.split("@")[0])[:120],
+                    email=email,
+                    password_hash=pw_hash,
+                    is_admin=admin,
+                    currency=s.currency,
+                    current_balance=0.0,
+                )
+                db.add(user)
+                db.commit()
+        except IntegrityError:
+            db.rollback()
+            raise exists from None
     log.info(
         "account created for user %s%s%s",
         user.id,
