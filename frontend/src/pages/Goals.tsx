@@ -4,14 +4,35 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Sparkline } from "../components/charts";
 import { GoalStatusBadge, goalTone } from "../components/domain";
-import { Button, Card, Drawer, Empty, Input, Label, PageHeader, Progress, Skeleton } from "../components/ui";
+import { Badge, Button, Card, Drawer, Empty, Input, Label, PageHeader, Progress, Select, Skeleton } from "../components/ui";
 import { api } from "../lib/api";
-import { date, money, prob } from "../lib/format";
+import { date, money, prob, titleCase } from "../lib/format";
 import { useRunAgents } from "../lib/hooks";
 import type { Goal } from "../lib/types";
 
-type Form = { id?: number; name: string; target_amount: number; saved_amount: number; deadline: string; priority: number };
-const EMPTY: Form = { name: "", target_amount: 100000, saved_amount: 0, deadline: "", priority: 1 };
+type SpendMode = "auto" | "spend" | "keep";
+type Form = { id?: number; name: string; target_amount: number; saved_amount: number; deadline: string; priority: number; spend_mode: SpendMode };
+const EMPTY: Form = { name: "", target_amount: 100000, saved_amount: 0, deadline: "", priority: 1, spend_mode: "auto" };
+
+function toForm(g: Goal): Form {
+  const mode: SpendMode = g.type_source === "user" ? (g.spend_at_deadline ? "spend" : "keep") : "auto";
+  return { id: g.id, name: g.name, target_amount: g.target_amount, saved_amount: g.saved_amount, deadline: g.deadline, priority: g.priority, spend_mode: mode };
+}
+
+function GoalTypeBadge({ g }: { g: Goal }) {
+  if (!g.goal_type) return null;
+  const how =
+    g.type_source === "jev"
+      ? `Classified by Jev (System One) from the goal's name — confidence ${g.type_confidence?.toFixed(2)}`
+      : g.type_source === "user"
+        ? "Set by you"
+        : "Classified by keyword rules (Jev not configured)";
+  return (
+    <Badge tone={g.type_source === "jev" ? "cyan" : g.type_source === "user" ? "green" : "neutral"} title={how}>
+      {titleCase(g.goal_type)} · {g.spend_at_deadline ? "spent at deadline" : "kept as savings"}
+    </Badge>
+  );
+}
 
 export default function Goals() {
   const qc = useQueryClient();
@@ -20,8 +41,15 @@ export default function Goals() {
   const [form, setForm] = useState<Form | null>(null);
   const save = useMutation({
     mutationFn: (f: Form) => {
-      const { id, ...body } = f;
-      return id ? api.patch(`/goals/${id}`, body) : api.post("/goals", body);
+      const body: Record<string, unknown> = {
+        name: f.name,
+        target_amount: f.target_amount,
+        saved_amount: f.saved_amount,
+        deadline: f.deadline,
+        priority: f.priority,
+      };
+      if (f.spend_mode !== "auto") body.spend_at_deadline = f.spend_mode === "spend";
+      return f.id ? api.patch(`/goals/${f.id}`, body) : api.post("/goals", body);
     },
     onSuccess: () => {
       setForm(null);
@@ -79,9 +107,12 @@ export default function Goals() {
                     <div className="mt-0.5 text-[13px] text-muted">
                       Priority {g.priority} · deadline {date(g.deadline, true)}
                     </div>
+                    <div className="mt-1.5">
+                      <GoalTypeBadge g={g} />
+                    </div>
                   </div>
                   <div className="flex gap-1">
-                    <Button size="sm" variant="ghost" onClick={() => setForm({ ...g })} aria-label="Edit">
+                    <Button size="sm" variant="ghost" onClick={() => setForm(toForm(g))} aria-label="Edit">
                       <Pencil className="size-4" />
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => confirm(`Delete "${g.name}"?`) && del.mutate(g.id)} aria-label="Delete">
@@ -190,6 +221,14 @@ export default function Goals() {
                 <Label hint="(1 = funded first)">Priority</Label>
                 <Input type="number" min={1} max={10} value={form.priority} onChange={(e) => setForm({ ...form, priority: Number(e.target.value) })} />
               </div>
+            </div>
+            <div>
+              <Label hint="(changes the balance forecast after the deadline)">At the deadline, the money is…</Label>
+              <Select value={form.spend_mode} onChange={(e) => setForm({ ...form, spend_mode: e.target.value as SpendMode })}>
+                <option value="auto">Let FinPilot decide from the name (Jev)</option>
+                <option value="spend">Spent — a trip, a purchase, an event</option>
+                <option value="keep">Kept — an emergency fund, an investment</option>
+              </Select>
             </div>
             <Button variant="primary" type="submit" loading={save.isPending} className="w-full">
               Save & re-forecast

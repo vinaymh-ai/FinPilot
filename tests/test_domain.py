@@ -82,3 +82,9 @@ def test_number_extraction_formats():
 def test_extract_json_tolerates_fences():
     assert extract_json('```json\n{"a": 1}\n```') == {"a": 1}
     assert extract_json('Sure! Here it is: {"b": [1,2]} thanks') == {"b": [1, 2]}
+
+
+def test_grounding_does_not_mistake_money_for_a_year():
+    facts = {"low_point": 8200, "deadline": "2026-12-20"}
+    assert not check_grounding("Your balance could fall to ₹2,000 in November.", facts)[0]
+    assert check_grounding("By December 2026 you could be at ₹8,200.", facts)[0]

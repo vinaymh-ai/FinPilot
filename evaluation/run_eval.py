@@ -1,7 +1,9 @@
 """FinPilot self-evaluation.
 
-    python -m evaluation.run_eval            # deterministic (rules + statistics), no API cost
-    python -m evaluation.run_eval --llm      # also measure the LLM layer through the configured provider (Mesh)
+    python -m evaluation.run_eval              # deterministic (rules + statistics), no API cost
+    python -m evaluation.run_eval --llm        # also measure the LLM layer through the configured provider (Mesh)
+    python -m evaluation.run_eval --jev        # also measure System One (Jev) live; records a replay cassette
+    python -m evaluation.run_eval --jev-replay # re-measure Jev offline from the recorded cassette
 
 Writes evaluation/results/latest.json (served at /api/evaluation and shown in the UI) and
 evaluation/results/REPORT.md. Test data: synthetic statements for 3 personas × N seeds with
@@ -67,7 +69,7 @@ def datasets(seeds: list[int], months: int = 8, end: dt.date = END) -> list[Synt
 
 def categorize(ds: SynthDataset, router: LLMRouter, *, use_patterns: bool = True):
     items = [CatItem(i, t.description, t.amount, t.date) for i, t in enumerate(ds.transactions)]
-    return CategorizerAgent(router=router).categorize(items, use_patterns=use_patterns)
+    return CategorizerAgent(router=router, use_jev=False).categorize(items, use_patterns=use_patterns)
 
 
 def lite_from(ds: SynthDataset, results) -> list[TxnLite]:
@@ -78,7 +80,9 @@ def lite_from(ds: SynthDataset, results) -> list[TxnLite]:
 
 
 # ============================================================================ 1. categorization
-def eval_categorization(dsets: list[SynthDataset], llm_router: LLMRouter | None) -> dict[str, Any]:
+def eval_categorization(
+    dsets: list[SynthDataset], llm_router: LLMRouter | None, jev_client: Any = None
+) -> dict[str, Any]:
     y_true, preds, seen_flags, sources = [], defaultdict(list), [], Counter()
     rows_total = 0
     llm_stats: dict[str, Any] = {}
@@ -86,7 +90,7 @@ def eval_categorization(dsets: list[SynthDataset], llm_router: LLMRouter | None)
         rows_total += len(ds.transactions)
         y_true += [t.true_category for t in ds.transactions]
         seen_flags += [match_merchant(normalize_text(t.description)) is not None for t in ds.transactions]
-        agent = CategorizerAgent(router=OFFLINE)
+        agent = CategorizerAgent(router=OFFLINE, use_jev=False)
         items = [CatItem(i, t.description, t.amount, t.date) for i, t in enumerate(ds.transactions)]
         # ablation ladder: lexicon → +keywords/P2P/amount-aware → +recurring patterns → +LLM
         lex = []
@@ -99,9 +103,15 @@ def eval_categorization(dsets: list[SynthDataset], llm_router: LLMRouter | None)
         res, st = agent.categorize(items)
         preds["3_plus_patterns (deterministic)"] += [r.category for r in res]
         sources.update(r.source for r in res)
+        if jev_client is not None:
+            res_jev, st_jev = CategorizerAgent(router=OFFLINE, jev=jev_client).categorize(items)
+            preds["4_plus_jev"] += [r.category for r in res_jev]
+            llm_stats.setdefault("jev_merchants", 0)
+            llm_stats["jev_merchants"] += st_jev.jev_merchants
+            llm_stats["jev_input_tokens"] = llm_stats.get("jev_input_tokens", 0) + st_jev.jev_tokens
         if llm_router is not None:
             t0 = time.perf_counter()
-            res_llm, st_llm = CategorizerAgent(router=llm_router).categorize(items)
+            res_llm, st_llm = CategorizerAgent(router=llm_router, use_jev=False).categorize(items)
             preds["4_plus_llm"] += [r.category for r in res_llm]
             llm_stats.setdefault("merchants_sent", 0)
             llm_stats["merchants_sent"] += st_llm.llm_merchants
@@ -125,7 +135,7 @@ def eval_categorization(dsets: list[SynthDataset], llm_router: LLMRouter | None)
             "accuracy_known_merchants": round(sum(seen) / len(seen), 4) if seen else None,
             "accuracy_long_tail": round(sum(unseen) / len(unseen), 4) if unseen else None,
         }
-        if mode.startswith("3") or mode.startswith("4"):
+        if mode.startswith(("3", "4")):
             out["ablation"][mode]["per_category"] = per
             errors = Counter((a, b) for a, b in zip(y_true, yp, strict=True) if a != b)
             out["ablation"][mode]["top_confusions"] = [
@@ -166,7 +176,7 @@ def eval_detectors(dsets: list[SynthDataset]) -> dict[str, Any]:
                 fp += 1
         fn += len(eligible - matched)
         # anomalies
-        report = AnalyzerAgent(router=OFFLINE).analyze(lite, series, narrate=False)
+        report = AnalyzerAgent(router=OFFLINE, use_jev=False).analyze(lite, series, narrate=False)
         flagged = {a.txn_id for a in report.anomalies}
         truth = {i for i, t in enumerate(ds.transactions) if t.anomaly}
         a_tp += len(flagged & truth)
@@ -225,8 +235,10 @@ def eval_forecast(seeds: list[int], horizons=(30, 60, 90)) -> dict[str, Any]:
                 train = [t for t in lite if t.date <= origin]
                 balance0 = ds.opening_balance + sum(t.amount for t in train)
                 series = detect_recurring(train, origin)
-                report = AnalyzerAgent(router=OFFLINE).analyze(train, series, as_of=origin, narrate=False)
-                eng = ForecasterAgent(router=OFFLINE, n_paths=300).engine(
+                report = AnalyzerAgent(router=OFFLINE, use_jev=False).analyze(
+                    train, series, as_of=origin, narrate=False
+                )
+                eng = ForecasterAgent(router=OFFLINE, use_jev=False, n_paths=300).engine(
                     train,
                     series,
                     balance=balance0,
@@ -309,7 +321,7 @@ def eval_simulation(seeds: list[int]) -> dict[str, Any]:
             res, _ = categorize(ds, OFFLINE)
             lite = lite_from(ds, res)
             series = detect_recurring(lite)
-            fa = ForecasterAgent(router=OFFLINE, n_paths=200)
+            fa = ForecasterAgent(router=OFFLINE, use_jev=False, n_paths=200)
             eng = fa.engine(
                 lite, series, balance=ds.closing_balance, as_of=ds.end_date, goals=[], exclude_ids=set()
             )
@@ -379,11 +391,11 @@ def eval_chat_routing() -> dict[str, Any]:
     set_router(OFFLINE)
     with session_scope() as s:
         seed_demo(s, end=END)
-    Coordinator(router=OFFLINE).run_pipeline(trigger="manual")
+    Coordinator(router=OFFLINE, use_jev=False).run_pipeline(trigger="manual")
     hits, rows = 0, []
     with session_scope() as s:
         kit = FinanceToolkit(s)
-        agent = ChatAgent(router=OFFLINE)
+        agent = ChatAgent(router=OFFLINE, use_jev=False)
         for q, expected in CHAT_CASES:
             tools = [t["tool"] for t in agent.answer(kit, q)["trace"]]
             ok = tools == expected
@@ -487,6 +499,10 @@ def render_markdown(r: dict[str, Any]) -> str:
         f"({ch['mode']}).",
         "",
     ]
+    if r.get("jev"):
+        from evaluation import jev_eval
+
+        lines += jev_eval.render(r["jev"])
     if r.get("llm_note"):
         lines += ["## LLM layer", "", r["llm_note"], ""]
     lines += [
@@ -509,6 +525,12 @@ def render_markdown(r: dict[str, Any]) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--llm", action="store_true", help="also evaluate the LLM categorization layer")
+    ap.add_argument(
+        "--jev", action="store_true", help="measure System One (Jev) decisions live and record them"
+    )
+    ap.add_argument(
+        "--jev-replay", action="store_true", help="measure Jev from the recorded cassette (offline)"
+    )
     ap.add_argument("--seeds", type=int, nargs="+", default=[1, 2, 3])
     args = ap.parse_args()
     llm_router = None
@@ -524,8 +546,26 @@ def main() -> None:
         note = f"LLM stage measured with {llm_router.describe('categorizer')}."
     t0 = time.perf_counter()
     dsets = datasets(args.seeds)
+    jev_client = None
+    if args.jev or args.jev_replay:
+        import tempfile
+
+        from evaluation.jev_eval import make_client
+        from finpilot.db import configure_database, init_db
+
+        # decision logs and call telemetry from the evaluation go to a throwaway database
+        configure_database(f"sqlite:///{tempfile.mkdtemp()}/jev-eval.db")
+        init_db()
+        jev_client = make_client("replay" if args.jev_replay else "live")
+        if args.jev_replay and not jev_client.tape:
+            jev_client = None  # nothing recorded yet: the Jev rows are reported as pending
+        elif args.jev and not jev_client.available():
+            print("--jev needs MESH_API_KEY (or JEV_PROVIDER=typesafe + TYPESAFE_API_KEY)", file=sys.stderr)
+            sys.exit(2)
     print("categorization …", flush=True)
-    cat = eval_categorization(dsets, llm_router)
+    cat = eval_categorization(dsets, llm_router, jev_client)
+    if jev_client is not None:
+        jev_client.save()
     print("detectors …", flush=True)
     det = eval_detectors(dsets)
     print("forecast backtest …", flush=True)
@@ -534,6 +574,10 @@ def main() -> None:
     sim = eval_simulation(args.seeds[:2])
     print("chat routing …", flush=True)
     chat = eval_chat_routing()
+    print("system one (jev) …", flush=True)
+    from evaluation import jev_eval
+
+    jev = jev_eval.run("live" if args.jev else ("replay" if args.jev_replay else None))
     result = {
         "generated_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
         "mode": "rules+LLM" if args.llm else "deterministic (no LLM)",
@@ -543,6 +587,7 @@ def main() -> None:
         "forecast": fc,
         "simulation": sim,
         "chat": chat,
+        "jev": jev,
         "llm_note": note,
         "runtime_seconds": round(time.perf_counter() - t0, 1),
     }

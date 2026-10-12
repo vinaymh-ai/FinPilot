@@ -1,16 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, ChevronDown, Eraser, Send, User, Wrench } from "lucide-react";
+import { Bot, ChevronDown, Eraser, Scale, Send, User, Wrench } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import { toast } from "sonner";
-import { Badge, Button, Card, ModelBadge } from "../components/ui";
+import { Badge, Button, Card, ModelBadge, ProbabilityBars } from "../components/ui";
 import { api } from "../lib/api";
 import { cn } from "../lib/format";
-import type { ChatMessage, ChatTrace } from "../lib/types";
+import type { ChatMessage, ChatRoute, ChatTrace } from "../lib/types";
 
 const SESSION = "web";
 const SUGGESTIONS = [
   "Can I afford a trip next month?",
+  "Why did my spending go up this month compared to usual?",
   "How much did I spend on food delivery last month?",
   "Am I on track for my emergency fund?",
   "What are my subscriptions?",
@@ -19,6 +20,48 @@ const SUGGESTIONS = [
   "How can I save money?",
   "Anything unusual in my transactions?",
 ];
+
+const ROUTE_ACTION: Record<string, { text: string; tone: "green" | "violet" | "red" | "neutral" }> = {
+  answered_by_rules: { text: "answered from tools — no LLM", tone: "green" },
+  escalated_to_llm: { text: "escalated to the LLM", tone: "violet" },
+  refused: { text: "refused — no LLM", tone: "red" },
+  fallback_rules: { text: "fallback router", tone: "neutral" },
+};
+
+function RouteView({ route }: { route: ChatRoute }) {
+  const [open, setOpen] = useState(false);
+  const act = ROUTE_ACTION[route.action] ?? ROUTE_ACTION.fallback_rules;
+  const slots = Object.entries(route.slots).filter(([, v]) => v);
+  return (
+    <div className="mt-2">
+      <button onClick={() => setOpen(!open)} className="inline-flex flex-wrap items-center gap-1.5 text-[12px] text-muted hover:text-ink">
+        <Scale className="size-3.5 text-cyan-600 dark:text-cyan-400" />
+        Jev routed as <b className="font-medium text-ink">{route.intent.replace(/_/g, " ")}</b>
+        <span className="num">({route.confidence.toFixed(2)})</span>→
+        <Badge tone={act.tone}>{act.text}</Badge>
+        <ChevronDown className={cn("size-3.5 transition", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div className="mt-2 space-y-2 rounded-xl border border-line bg-surface-2/60 p-3 text-[11.5px]">
+          <ProbabilityBars probs={route.probabilities} highlight={route.intent} />
+          <div className="flex flex-wrap gap-1.5 text-muted">
+            {slots.map(([k, v]) => (
+              <Badge key={k}>
+                {k.replace("_", " ")}: {String(v).replace(/_/g, " ")}
+              </Badge>
+            ))}
+            <Badge title="Score question, lowest first">complexity {route.complexity.toFixed(1)} · {route.complexity_label.toLowerCase()}</Badge>
+            {route.order_checked && <Badge tone="amber">re-asked with options reversed</Badge>}
+          </div>
+          <div className="text-muted">
+            {route.model} · {route.cached ? "cache hit (free)" : `${route.latency_ms} ms · ${route.input_tokens} input tokens · $${route.cost_usd.toFixed(6)}`}
+            {route.llm_model && ` · answered by ${route.llm_model}`}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function TraceView({ trace }: { trace: ChatTrace[] }) {
   const [open, setOpen] = useState(false);
@@ -64,11 +107,14 @@ export default function Chat() {
 
   const send = useMutation({
     mutationFn: (message: string) =>
-      api.post<{ answer: string; trace: ChatTrace[]; model: string }>("/chat", { message, session_id: SESSION }),
+      api.post<{ answer: string; trace: ChatTrace[]; model: string; route: ChatRoute | null }>("/chat", { message, session_id: SESSION }),
     onMutate: (message) =>
       setMessages((m) => [...m, { role: "user", content: message }, { role: "assistant", content: "", pending: true }]),
     onSuccess: (r) =>
-      setMessages((m) => [...m.filter((x) => !x.pending), { role: "assistant", content: r.answer, trace: r.trace, model: r.model }]),
+      setMessages((m) => [
+        ...m.filter((x) => !x.pending),
+        { role: "assistant", content: r.answer, trace: r.trace, model: r.model, route: r.route },
+      ]),
     onError: (e: Error) => {
       setMessages((m) => m.filter((x) => !x.pending));
       toast.error(e.message);
@@ -140,6 +186,7 @@ export default function Chat() {
                 )}
                 {m.role === "assistant" && !m.pending && (
                   <>
+                    {m.route && <RouteView route={m.route} />}
                     <TraceView trace={m.trace ?? []} />
                     {m.model && (
                       <div className="mt-2">
@@ -172,7 +219,8 @@ export default function Chat() {
         </form>
       </Card>
       <div className="mt-2 text-center text-[11.5px] text-muted">
-        <Badge>tool-calling</Badge> The chat agent never invents numbers — every figure comes from a tool call you can inspect.
+        <Badge tone="cyan">Jev routing</Badge> Simple questions are answered straight from your data; only complex ones reach an LLM. Every figure
+        comes from a tool call you can inspect.
       </div>
     </div>
   );

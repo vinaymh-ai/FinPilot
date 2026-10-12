@@ -23,128 +23,96 @@ from finpilot.domain.taxonomy import BY_ID, CATEGORY_IDS
 
 # ====================================================================== merchants
 
+# Criteria cost input tokens on every request, so they are as short as the distinctions allow:
+# `not_for` only where two options are genuinely confused, examples only where a name alone misleads.
 CATEGORY_GUIDE: dict[str, dict[str, Any]] = {
     "income": {
-        "what": "Money received: salary, freelance or client payouts, interest, dividends, refunds, cashback",
-        "not_for": "money moved in from your own other account (transfers)",
-        "examples": ["NEFT SALARY ACME TECH", "UPI CR UPWORK ESCROW", "SB INTEREST CREDIT"],
+        "what": "Money received: salary, client payouts, interest, dividends, refunds, cashback",
+        "not_for": "money from your own other account (transfers)",
     },
     "rent": {
-        "what": "Rent to a landlord, PG/hostel charges, housing-society maintenance",
-        "not_for": "hotel stays while travelling (travel)",
-        "examples": ["NOBROKER RENT", "MYGATE SOCIETY MAINTENANCE"],
+        "what": "Rent, PG/hostel charges, housing-society maintenance",
+        "not_for": "hotel stays (travel)",
     },
     "utilities": {
-        "what": "Household bills: electricity, water, gas/LPG, broadband, mobile recharge, DTH",
+        "what": "Household bills: electricity, water, gas, broadband, mobile recharge, DTH",
         "not_for": "streaming apps or software (subscriptions)",
-        "examples": ["BESCOM BILLDESK", "AIRTEL PREPAID", "ACT FIBERNET", "INDANE GAS"],
     },
     "groceries": {
-        "what": "Supermarkets, kirana/provision stores, quick-commerce grocery apps, milk, vegetables",
-        "not_for": "cooked restaurant meals delivered by an app (food_delivery)",
-        "examples": ["BLINKIT", "DMART", "ZEPTO", "SRI LAKSHMI PROVISION STORE"],
+        "what": "Supermarkets, kirana/provision stores, quick-commerce grocery apps, milk",
+        "not_for": "cooked meals from a delivery app (food_delivery)",
     },
     "food_delivery": {
         "what": "Restaurant meals ordered through a delivery app",
-        "not_for": "eating at the restaurant (dining); grocery delivery (groceries)",
-        "examples": ["SWIGGY", "ZOMATO", "EATSURE"],
+        "not_for": "eating at the restaurant (dining)",
+        "examples": ["SWIGGY", "ZOMATO", "BOX8"],
     },
     "dining": {
         "what": "Eating or drinking out: restaurants, cafés, bars, bakeries, small 'hotel' eateries",
-        "not_for": "meals delivered by an app (food_delivery)",
-        "examples": ["TRUFFLES", "STARBUCKS", "HOTEL ANNAPOORNA (small amount)", "CHAI POINT"],
+        "not_for": "app-delivered meals (food_delivery)",
+        "examples": ["TRUFFLES", "HOTEL ANNAPOORNA (small amount)"],
     },
     "transport": {
-        "what": "Local travel: cabs, autos, metro, city buses, fuel, parking, tolls, vehicle servicing",
-        "not_for": "flights, inter-city trains or buses (travel)",
-        "examples": ["UBER INDIA", "RAPIDO", "BMRCL METRO", "HP PETROL PUMP", "FASTAG"],
+        "what": "Local travel: cabs, autos, metro, buses, fuel, parking, tolls, vehicle servicing",
+        "not_for": "flights or inter-city trips (travel)",
     },
     "shopping": {
-        "what": "Retail purchases: e-commerce, clothing, electronics, home goods, lifestyle stores",
-        "not_for": "groceries; paid memberships such as Prime (subscriptions)",
-        "examples": ["AMAZON", "MYNTRA", "CROMA", "CHUMBAK", "DECATHLON"],
+        "what": "Retail: e-commerce, clothing, electronics, furniture, home and lifestyle stores",
+        "not_for": "paid memberships such as Prime (subscriptions)",
     },
     "subscriptions": {
-        "what": "Recurring digital services and memberships: streaming, music, software, cloud storage, "
-        "app memberships",
-        "not_for": "mobile, broadband or electricity bills (utilities); gym (health)",
-        "examples": ["NETFLIX", "SPOTIFY", "GOOGLE ONE", "CHATGPT PLUS", "SWIGGY ONE"],
+        "what": "Recurring digital services and memberships: streaming, music, software, cloud, app memberships",
+        "not_for": "phone, broadband, power bills (utilities); gym (health)",
     },
     "entertainment": {
-        "what": "Movies, concerts, events, amusement parks, game purchases",
-        "not_for": "monthly streaming services (subscriptions)",
-        "examples": ["BOOKMYSHOW", "PVR CINEMAS", "WONDERLA", "STEAM"],
+        "what": "Movies, concerts, events, amusement parks, games",
+        "not_for": "monthly streaming (subscriptions)",
     },
-    "health": {
-        "what": "Pharmacies, doctors, hospitals, diagnostic labs, gyms and fitness classes",
-        "examples": ["APOLLO PHARMACY", "PRACTO", "THYROCARE", "CULT.FIT"],
-    },
-    "education": {
-        "what": "Courses, tuition, school or college fees, exam fees, books",
-        "examples": ["UDEMY", "BYJUS", "COURSERA", "SAPNA BOOK HOUSE"],
-    },
+    "health": {"what": "Pharmacies, doctors, hospitals, diagnostic labs, dentists, gyms"},
+    "education": {"what": "Courses, tuition, school or college fees, exam fees, books"},
     "travel": {
         "what": "Trips: flights, inter-city trains and buses, hotels and stays, holiday bookings",
-        "not_for": "daily commute (transport); a small bill at a 'hotel' eatery (dining)",
-        "examples": ["MAKEMYTRIP", "INDIGO", "IRCTC", "OYO ROOMS"],
+        "not_for": "daily commute (transport)",
     },
-    "personal_care": {
-        "what": "Salons, spas, grooming, beauty services",
-        "examples": ["GREEN TRENDS", "URBAN COMPANY", "NATURALS SALON"],
-    },
-    "loans": {
-        "what": "Loan EMIs and repayments to banks or lenders",
-        "not_for": "a store purchase made on EMI (shopping)",
-        "examples": ["HDFC LOAN EMI", "BAJAJ FINSERV EMI"],
-    },
-    "insurance": {
-        "what": "Insurance premiums: health, life, vehicle, term",
-        "examples": ["LIC PREMIUM", "ACKO", "STAR HEALTH"],
-    },
-    "investments": {
-        "what": "Saving or investing: SIPs, mutual funds, stocks, FDs, RDs, PPF, NPS",
-        "examples": ["ZERODHA", "GROWW SIP", "ICICI FD BOOKING"],
-    },
+    "personal_care": {"what": "Salons, spas, grooming, beauty services"},
+    "loans": {"what": "Loan EMIs and repayments to banks or lenders"},
+    "insurance": {"what": "Insurance premiums: health, life, vehicle, term"},
+    "investments": {"what": "SIPs, mutual funds, stocks, FDs, RDs, PPF, NPS"},
     "transfers": {
         "what": "Money to or from a person, to your own account, or a credit-card bill payment",
-        "not_for": "paying a shop or business via UPI (use that business's category)",
-        "examples": ["UPI RAHUL SHARMA", "SELF TRANSFER", "CRED CARD BILL"],
+        "not_for": "paying a business via UPI (that business's category)",
     },
-    "cash": {"what": "ATM cash withdrawals", "examples": ["ATM WDL", "NFS CASH WITHDRAWAL"]},
-    "fees": {
-        "what": "Bank charges, late fees, penalties, card annual fees, GST on charges",
-        "examples": ["SMS CHARGES", "LATE PAYMENT FEE", "MIN BAL PENALTY"],
-    },
-    "gifts_donations": {
-        "what": "Gifts, charity, temple or NGO donations, crowdfunding",
-        "examples": ["GIVEINDIA", "ISKCON DONATION", "IGP GIFTS"],
-    },
+    "cash": {"what": "ATM cash withdrawals"},
+    "fees": {"what": "Bank charges, late fees, penalties, card annual fees"},
+    "gifts_donations": {"what": "Gifts, charity, temple or NGO donations"},
     "other": {"what": "Genuinely unclear from the text — choose this rather than guessing"},
 }
 assert set(CATEGORY_GUIDE) == set(CATEGORY_IDS), "CATEGORY_GUIDE must cover the taxonomy"
 
 # Service families double as subscription-overlap groups (same names as the lexicon's `group`).
 SERVICE_FAMILIES: dict[str, str] = {
-    "video_streaming": "Video streaming: Netflix, Hotstar, Prime Video, SonyLIV, ZEE5",
-    "music_streaming": "Music streaming: Spotify, Apple Music, JioSaavn, Gaana",
-    "audiobooks": "Audiobooks and podcasts: Audible, Pocket FM, Kuku FM",
-    "ebooks": "E-books and digital magazines",
-    "news_media": "News or newspaper subscriptions",
-    "cloud_storage": "Cloud storage and backup: iCloud, Google One, Dropbox",
-    "productivity": "Office and productivity software: Microsoft 365, Notion",
-    "creative_software": "Design and creative tools: Adobe, Canva",
-    "ai_assistant": "AI assistants: ChatGPT Plus, Claude Pro, Gemini",
-    "developer_tools": "Developer tools and hosting",
-    "learning_app": "Learning-app memberships: Duolingo, Coursera Plus",
-    "fitness_membership": "Gym or fitness memberships: Cult.fit",
-    "delivery_membership": "Food or grocery delivery memberships: Swiggy One, Zomato Gold",
-    "shopping_membership": "Shopping memberships: Amazon Prime, Flipkart VIP",
-    "ride_membership": "Ride memberships: Uber One",
-    "gaming_membership": "Gaming subscriptions: Xbox Game Pass, PlayStation Plus",
-    "lifestyle_membership": "Bundled lifestyle memberships: Times Prime",
-    "utility_bill": "A household utility bill (mobile, broadband, electricity, gas)",
-    "none": "Not a recurring digital service or membership",
+    "video_streaming": "Video streaming (Netflix, Hotstar)",
+    "music_streaming": "Music streaming (Spotify, JioSaavn)",
+    "audiobooks": "Audiobooks, podcasts (Audible, Pocket FM)",
+    "ebooks": "E-books, digital magazines",
+    "news_media": "News subscriptions",
+    "cloud_storage": "Cloud storage (iCloud, Google One)",
+    "productivity": "Office/productivity software (Microsoft 365)",
+    "creative_software": "Design tools (Adobe, Canva)",
+    "ai_assistant": "AI assistants (ChatGPT Plus)",
+    "developer_tools": "Developer tools, hosting",
+    "learning_app": "Learning apps (Duolingo)",
+    "fitness_membership": "Gym/fitness memberships",
+    "delivery_membership": "Delivery memberships (Swiggy One)",
+    "shopping_membership": "Shopping memberships (Prime)",
+    "ride_membership": "Ride memberships (Uber One)",
+    "gaming_membership": "Gaming subscriptions (Game Pass)",
+    "lifestyle_membership": "Bundled memberships (Times Prime)",
+    "utility_bill": "A utility bill",
+    "none": "Not a digital service or membership",
 }
+# Subscriptions are small, recurring debits: don't pay for the family question on a ₹40k sofa.
+FAMILY_MAX_AMOUNT = 5000
 
 
 def amount_band(amount: float, currency: str = "INR") -> str:
@@ -177,7 +145,7 @@ def merchant_state(
     }
 
 
-def merchant_questions(*, credit: bool) -> dict[str, Question]:
+def merchant_questions(*, credit: bool, typical_amount: float = 0.0) -> dict[str, Question]:
     cats = [c for c in CATEGORY_IDS if credit or c != "income"]
     qs: dict[str, Question] = {
         "category": Choice(
@@ -196,7 +164,7 @@ def merchant_questions(*, credit: bool) -> dict[str, Question]:
             },
         ),
     }
-    if not credit:
+    if not credit and abs(typical_amount) < FAMILY_MAX_AMOUNT:
         qs["service_family"] = Choice(
             "If this merchant is a recurring digital service or membership, which kind is it?",
             dict(SERVICE_FAMILIES),

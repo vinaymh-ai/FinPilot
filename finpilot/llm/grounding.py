@@ -16,6 +16,7 @@ _NUM_RE = re.compile(
     r"(?<![\w.])[-+]?(?:₹|rs\.?|inr|\$|€|£)?\s?(\d{1,3}(?:,\d{2,3})+|\d+)(?:\.(\d+))?\s?(k|l|lakh|lakhs|cr|crore|m|%)?(?![\w])",
     re.IGNORECASE,
 )
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}(-\d{2})?([T ][\d:.+Z-]*)?$")
 _SCALE = {"k": 1e3, "l": 1e5, "lakh": 1e5, "lakhs": 1e5, "cr": 1e7, "crore": 1e7, "m": 1e6}
 
 
@@ -41,6 +42,8 @@ def _collect(obj: Any, acc: list[float]) -> None:
     if isinstance(obj, (int, float)):
         acc.append(float(obj))
     elif isinstance(obj, str):
+        if _ISO_DATE.match(obj.strip()):
+            return  # "2026-12-20" is a date, not three amounts (its parts would whitelist ₹2,000)
         acc.extend(v for v, _ in extract_numbers(obj))
     elif isinstance(obj, dict):
         for v in obj.values():
@@ -56,16 +59,12 @@ def allowed_numbers(*facts: Any) -> list[float]:
         _collect(f, acc)
     derived: list[float] = []
     for v in acc:
-        derived += [
-            abs(v),
-            abs(v) * 12,
-            abs(v) / 12,
-            abs(v) * 100,
-            abs(v) / 100,
-            round(abs(v)),
-            round(abs(v), -2),
-            round(abs(v), -3),
-        ]
+        a = abs(v)
+        derived += [a, a * 12, a / 12, round(a), round(a, -2), round(a, -3)]
+        if a <= 1:
+            derived.append(a * 100)  # probability 0.42 → "42%" (not: day 20 → "₹2,000")
+        elif a <= 100:
+            derived.append(a / 100)
     return acc + derived
 
 
@@ -78,15 +77,24 @@ def _close(value: float, candidates: Iterable[float]) -> bool:
     return False
 
 
+def _money_marked(text: str) -> list[bool]:
+    """Per extracted number: does it carry a currency symbol or a thousands separator?"""
+    marks = []
+    for m in _NUM_RE.finditer(text or ""):
+        token = m.group(0)
+        marks.append(bool(re.search(r"₹|rs\.?|inr|\$|€|£", token, re.IGNORECASE)) or "," in m.group(1))
+    return marks
+
+
 def check_grounding(text: str, *facts: Any) -> tuple[bool, list[float]]:
     """Return (ok, ungrounded_numbers). Small integers (counts, months, days) and years are ignored."""
     allowed = allowed_numbers(*facts)
     bad: list[float] = []
-    for value, is_pct in extract_numbers(text):
+    for (value, is_pct), money in zip(extract_numbers(text), _money_marked(text), strict=True):
         if not is_pct and value <= 31 and float(value).is_integer():
             continue  # day-of-month / counts / month numbers
-        if 2000 <= value <= 2100 and float(value).is_integer() and not is_pct:
-            continue  # years
+        if 2000 <= value <= 2100 and float(value).is_integer() and not is_pct and not money:
+            continue  # years ("₹2,000" is money, not a year)
         if not _close(value, allowed):
             bad.append(value)
     return (not bad), bad

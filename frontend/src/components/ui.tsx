@@ -83,6 +83,7 @@ const TONES = {
   amber: "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
   blue: "bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/20",
   violet: "bg-violet-500/10 text-violet-600 dark:text-violet-400 border-violet-500/20",
+  cyan: "bg-cyan-500/10 text-cyan-700 dark:text-cyan-300 border-cyan-500/25",
 } as const;
 export type Tone = keyof typeof TONES;
 
@@ -323,9 +324,38 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
 export function ModelBadge({ model }: { model: string | null | undefined }) {
   if (!model) return null;
   const isRules = model === "rules";
+  if (/jev/i.test(model)) {
+    return (
+      <Badge tone="cyan" title={`System One decision via ${model} — typed answer with calibrated probabilities, no text generation`}>
+        {model.replace(/^mesh:/, "mesh · ").replace("typesafe/", "")}
+      </Badge>
+    );
+  }
   return (
     <Badge tone={isRules ? "neutral" : "violet"} title={isRules ? "Deterministic (no LLM)" : `Generated via ${model}`}>
       {isRules ? "rules" : model.replace(/^mesh:/, "mesh · ")}
     </Badge>
+  );
+}
+
+/** Top-k probability bars for a typed (Choice) answer. */
+export function ProbabilityBars({ probs, k = 3, highlight }: { probs: Record<string, number>; k?: number; highlight?: string }) {
+  const rows = Object.entries(probs)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, k);
+  return (
+    <div className="space-y-1">
+      {rows.map(([key, p]) => (
+        <div key={key} className="flex items-center gap-2 text-[11.5px]">
+          <span className={cn("w-32 truncate", key === highlight ? "font-medium text-ink" : "text-muted")} title={key}>
+            {key.replace(/_/g, " ")}
+          </span>
+          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-2">
+            <div className={cn("h-full rounded-full", key === highlight ? "bg-cyan-500" : "bg-muted/40")} style={{ width: `${Math.max(2, p * 100)}%` }} />
+          </div>
+          <span className="num w-10 text-right text-muted">{Math.round(p * 100)}%</span>
+        </div>
+      ))}
+    </div>
   );
 }

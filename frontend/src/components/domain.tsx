@@ -34,6 +34,7 @@ const SOURCE_TONE: Record<string, Tone> = {
   rule: "blue",
   keyword: "amber",
   llm: "violet",
+  jev: "cyan",
   memory: "green",
   user: "green",
   history: "green",

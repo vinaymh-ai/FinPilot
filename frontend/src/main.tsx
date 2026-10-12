@@ -16,6 +16,7 @@ const Transactions = lazy(() => import("./pages/Transactions"));
 const Chat = lazy(() => import("./pages/Chat"));
 const Digests = lazy(() => import("./pages/Digests"));
 const Agents = lazy(() => import("./pages/Agents"));
+const Decisions = lazy(() => import("./pages/Decisions"));
 const Evaluation = lazy(() => import("./pages/Evaluation"));
 const SettingsPage = lazy(() => import("./pages/Settings"));
 
@@ -53,6 +54,7 @@ createRoot(document.getElementById("root")!).render(
               <Route path="/chat" element={<Chat />} />
               <Route path="/digests" element={<Digests />} />
               <Route path="/agents" element={<Agents />} />
+              <Route path="/decisions" element={<Decisions />} />
               <Route path="/evaluation" element={<Evaluation />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={<Overview />} />

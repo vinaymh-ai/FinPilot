@@ -5,9 +5,9 @@ an *estimate* of what the same decision cost before Jev, derived from FinPilot's
 
 * `merchant_category` — the batched LLM classifier: its system prompt (taxonomy) amortised over a
   40-merchant batch, plus ~70 input / ~45 output tokens per merchant line.
-* `chat_route` — a chat answer that Jev routed to a deterministic handler would otherwise have run
-  the LLM tool loop: ~2 rounds of (system prompt + tool schemas + question) + one tool result in,
-  ~2 short completions out.
+* `chat_route` — a chat answer that Jev routed to a deterministic handler (or refused) would otherwise
+  have run the LLM tool loop: ~2 rounds of (system prompt + tool schemas + question) + one tool result
+  in, ~2 short completions out. Messages Jev was unsure about are not counted.
 
 Only those two *replace* LLM calls, so only they count as savings. The faithfulness guard, goal
 typing and CSV-column mapping are checks FinPilot did not have before Jev: they are reported as
@@ -25,6 +25,10 @@ from finpilot.llm.client import llm_cost_usd
 
 CHARS_PER_TOKEN = 4.0
 REPLACES_LLM = {"merchant_category", "chat_route"}
+# Which logged actions mean "the LLM call did not happen because of this decision":
+# a merchant Jev decided *or deferred to rules* skipped the LLM batch (cascade is opt-in); a chat message
+# skipped the LLM only when Jev routed it confidently (answered from tools or refused).
+AVOIDING_ACTIONS = {"merchant_category": {"accepted", "deferred"}, "chat_route": {"accepted"}}
 
 
 def approx_tokens(obj: Any) -> int:
@@ -77,8 +81,7 @@ def savings_report(
             "replaces_llm": base in REPLACES_LLM,
         }
         if base in REPLACES_LLM and base == purpose:
-            # chat answers escalated to the LLM still paid for it; everything else avoided the call
-            avoided = sum(v for k, v in acts.items() if k != "escalated")
+            avoided = sum(v for k, v in acts.items() if k in AVOIDING_ACTIONS[base])
             tin, tout = eq[base]
             llm = avoided * llm_cost_usd(tin, tout, s)
             row.update(

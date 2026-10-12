@@ -256,7 +256,7 @@ class CategorizerAgent(BaseAgent):
                         count=len(its),
                         currency=self.currency,
                     ),
-                    merchant_questions(credit=credit),
+                    merchant_questions(credit=credit, typical_amount=amounts[len(amounts) // 2]),
                 )
             )
         stats.jev_merchants = len(groups)

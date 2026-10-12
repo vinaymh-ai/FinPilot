@@ -431,10 +431,10 @@ def test_savings_report_only_counts_replaced_llm_calls():
             "chat_route": {"calls": 10, "input_tokens": 9000, "cost_usd": 0.000378},
             "faithfulness": {"calls": 4, "input_tokens": 4000, "cost_usd": 0.000168},
         },
-        {"chat_route": {"accepted": 8, "escalated": 2}, "faithfulness": {"accepted": 4}},
+        {"chat_route": {"accepted": 8, "escalated": 2, "deferred": 1}, "faithfulness": {"accepted": 4}},
     )
     chat = next(r for r in rep["rows"] if r["purpose"] == "chat_route")
-    assert chat["llm_calls_avoided"] == 8 and chat["llm_cost_avoided_usd"] > 0
+    assert chat["llm_calls_avoided"] == 8 and chat["llm_cost_avoided_usd"] > 0  # unsure routes don't count
     assert rep["jev_cost_added_checks_usd"] == pytest.approx(0.000168)
     assert rep["net_savings_usd"] == pytest.approx(rep["llm_cost_avoided_usd"] - 0.000378)
 

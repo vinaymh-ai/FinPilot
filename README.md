@@ -8,8 +8,14 @@ FinPilot ingests a bank statement, and a team of cooperating agents categorises 
 behaviour over time, simulates 400 possible futures from your own habits, and turns all of it into ranked,
 quantified, *auditable* recommendations. A background scheduler delivers a weekly digest without being asked.
 
-**Every LLM call routes through [Mesh API](https://developers.meshapi.ai)** (`https://api.meshapi.ai/v1`) by
+**Every AI call routes through [Mesh API](https://developers.meshapi.ai)** (`https://api.meshapi.ai/v1`) by
 default — and the system still runs end-to-end with **zero LLM spend** (each agent has a deterministic path).
+
+**System One + System Two.** Closed-set *decisions* — which category, which chat intent, is this LLM paragraph
+faithful, is this goal money you'll spend — go to **[Jev](docs/JEV.md)** (TypeSafe's decision model, via Mesh
+`POST /v1/evaluate`): typed answers with calibrated probabilities, billed on input tokens only. LLMs only *write*.
+Simple chat questions are answered straight from your data without an LLM; unsafe or off-topic ones are refused
+without one.
 
 ![Overview](docs/screenshots/overview.png)
 
@@ -25,13 +31,14 @@ default — and the system still runs end-to-end with **zero LLM spend** (each a
 1. [What it does — the story](#1-what-it-does--the-story)
 2. [Quick start](#2-quick-start)
 3. [How the agents cooperate](#3-how-the-agents-cooperate)
-4. [Forecasting & what-if simulation](#4-forecasting--what-if-simulation)
-5. [Auditable decision trail](#5-auditable-decision-trail)
-6. [Self-evaluation results](#6-self-evaluation-results)
-7. [Key design decisions](#7-key-design-decisions)
-8. [LLM providers — Mesh by default, bring your own](#8-llm-providers--mesh-by-default-bring-your-own)
-9. [API, project layout, deployment](#9-api-project-layout-deployment)
-10. [Limitations & roadmap](#10-limitations--roadmap)
+4. [System One decisions with Jev](#4-system-one-decisions-with-jev)
+5. [Forecasting & what-if simulation](#5-forecasting--what-if-simulation)
+6. [Auditable decision trail](#6-auditable-decision-trail)
+7. [Self-evaluation results](#7-self-evaluation-results)
+8. [Key design decisions](#8-key-design-decisions)
+9. [LLM providers — Mesh by default, bring your own](#9-llm-providers--mesh-by-default-bring-your-own)
+10. [API, project layout, deployment](#10-api-project-layout-deployment)
+11. [Limitations & roadmap](#11-limitations--roadmap)
 
 ---
 
@@ -77,8 +84,10 @@ irregular income).
 
 **Zero-cost mode.** Without a key (or with `LLM_ENABLED=false`) every agent completes its job deterministically —
 93% categorisation accuracy, full forecasting, simulation, advice with template text, and a rule-based chat that
-calls the same tools. Adding a Mesh key upgrades the long-tail categorisation, narratives, advice phrasing and the
-free-form chat. You can also point it at a free provider (Groq, Gemini free tier, OpenRouter `:free`, local Ollama).
+calls the same tools. Adding a Mesh key turns on both systems with the same `rsk_` key: **Jev** decisions
+(long-tail categories, chat routing, the faithfulness guard, goal typing — fractions of a cent per thousand) and the
+**LLM** for narratives, advice phrasing and complex chat. You can also point the LLM side at a free provider (Groq,
+Gemini free tier, OpenRouter `:free`, local Ollama); `JEV_ENABLED=false` turns decisions back to rules.
 
 ---
 
@@ -103,16 +112,17 @@ graph LR
 | Agent | Its job | Own prompt / tools | Deterministic path | Where the LLM adds value |
 |---|---|---|---|---|
 | **Coordinator** | Plans the run (skip categorisation if nothing is new, add digest on scheduled runs), routes, records the trail | LangGraph conditional edges | always | — |
-| **Categorizer** | Label every transaction with category + confidence + reason | Categorisation prompt with full taxonomy & Indian-retail hints | memory → history → ~200-brand lexicon → keyword evidence (amount- & sign-aware, P2P detection) → recurring-pattern post-pass | Long-tail local merchants, **batched once per unique merchant** (300 Swiggy rows never reach the LLM) |
+| **Categorizer** | Label every transaction with category + confidence + reason | Jev questions: category (structured criteria), payee type, service family | memory → history → ~200-brand lexicon → keyword evidence (amount- & sign-aware, P2P detection) → recurring-pattern post-pass | **Jev decides each long-tail merchant once** (all in parallel; 300 Swiggy rows never leave the lexicon); unsure answers are deferred, LLM cascade opt-in |
 | **Analyzer** | Behaviour over time; patterns & anomalies | Behaviour-profile prompt | rolling 30-day windows vs previous three (z-scores), median/MAD outliers, duplicate/fee/new-payee detection, recurring-series detection, subscription overlap & **usage evidence**, impulse tagging | 3–4 bullet behaviour profile (grounding-checked) |
 | **Forecaster** | Project the trajectory; simulate decisions | Forecast-narrative prompt | Monte-Carlo engine (below), goal funding, what-if, "wait until"/"cut" suggestions | Plain-language explanation (grounding-checked) |
 | **Advisor** | Turn signals into specific, ranked actions | Advisor prompt (rewrite, never invent numbers) | 11 candidate generators, priority scoring, feedback adaptation, goal-progress adaptation | Friendlier phrasing + weekly headline, rejected if any figure isn't in the evidence |
-| **Chat** | Free-form money questions | System prompt + **10 function-calling tools** (`simulate`, `get_spending`, `get_forecast`, …) | Intent router that calls the *same* tools | Open-ended questions, multi-step tool use |
+| **Chat** | Free-form money questions | Jev router (intent, slots, complexity) + system prompt + **10 function-calling tools** (`simulate`, `get_spending`, `get_forecast`, …) | Per-intent handlers that call the *same* tools | Jev answers simple questions from tools and refuses injection/off-topic **without an LLM**; complex ones go to the LLM tool loop |
 | **Digest** | Weekly proactive message: one insight + one action | Digest prompt | Template composer | Warm, specific opener (grounding-checked) |
 
 **One run, step by step (demo account):**
 1. `plan` — 609 transactions, 609 uncategorised → plan `categorize → analyze → forecast → advise`.
-2. `categorize` — 502 by lexicon, 89 by keyword evidence, 18 uncertain → batched to the LLM if configured.
+2. `categorize` — 502 by lexicon, 89 by keyword evidence, 18 uncertain → one Jev decision per unknown merchant
+   (or the batched LLM when Jev isn't configured).
 3. `analyze` — 14 recurring series, 8 subscriptions, 4 anomalies, 12 findings → persisted as insights; anomalies
    and impulse tags written back to transactions.
 4. `forecast` — 400 paths × 185 days in ~50 ms; goal snapshots appended (used next run to adapt advice).
@@ -121,7 +131,45 @@ graph LR
 
 ---
 
-## 4. Forecasting & what-if simulation
+## 4. System One decisions with Jev
+
+LLMs are for *writing*. Most of what FinPilot asked them to do was *deciding* — pick a category, pick an intent,
+judge a paragraph — where the answer is one of a known set. Those decisions now go to **Jev**
+(`typesafe/jev-1.13`) through Mesh `POST /v1/evaluate`: you send state + named questions, you get a probability for
+every option, already typed. Full design notes, cost analysis and sources: **[docs/JEV.md](docs/JEV.md)**.
+
+| Decision | Before | With Jev |
+|---|---|---|
+| Unknown merchant → category | batched LLM JSON | `category` + `payee_type` + `service_family` in one request per merchant, all in parallel; stored as a merchant profile and never paid for again |
+| Chat message → what to do | LLM tool loop for every message | `intent` (12 options) + slots + `complexity` Score → deterministic tool handler (no LLM), refusal (injection / off-topic / "move my money"), or LLM escalation with a cheaper model for simple ones |
+| LLM paragraph → show it? | numeric grounding check | numeric check **+** claim-support Choice (supported / unsupported claim / contradiction / generic) |
+| Goal → spent or kept? | all goals treated as savings | `goal_type` Choice + `spend_at_deadline` Noul → trip money leaves the forecast on the deadline |
+| Unknown CSV header → column role | rejected | Jev proposes, **code verifies** the values fit (dates parse, amounts are numbers) |
+| Unknown subscription → overlap group | lexicon brands only | `service_family` joins lexicon groups (Hoichoi + Netflix = overlapping video streaming) |
+
+**Policy, not blind trust** (`finpilot/decisions/policy.py`): act at ≥ `JEV_ACCEPT_CONFIDENCE`, otherwise keep the
+deterministic answer; re-ask mid-confidence answers with the options **reversed** (option-order bias) and average;
+log every decision with its probabilities and the action taken (**Decisions** page, `GET /api/decisions`). Math,
+dates and amounts never go to Jev — they arrive as code-computed bands ("small: under ₹500", "in about 5 months").
+The LLM cascade for unsure categories is **off by default**: an independent benchmark found cascades to a fallback
+LLM introduced more errors than they fixed — enable it only if `run_eval --jev` shows a gain.
+
+**Cost** (input tokens only, $0.042/1M): a chat message Jev routes to a tool handler costs ~1/13 of the LLM tool
+loop it replaces. Categorization is roughly cost-neutral versus a *batched* cheap LLM — the win there is calibrated
+confidence, always-valid labels and latency. The faithfulness guard, goal typing and CSV mapping are new checks and
+are reported as added cost, never as savings (`GET /api/decisions/stats`).
+
+| Decisions (Jev) page | Chat routed by Jev |
+|---|---|
+| ![Decisions](docs/screenshots/decisions.png) | ![Chat routing](docs/screenshots/chat-jev-routing.png) |
+
+<sub>UI previews rendered against a <b>simulated</b> <code>/v1/evaluate</code> (the development sandbox had no network
+access to Mesh) — the figures in these two images are illustrative, not measurements. Measured numbers come from
+<code>run_eval --jev</code>.</sub>
+
+---
+
+## 5. Forecasting & what-if simulation
 
 *"If you keep behaving like this, here is what happens."*
 
@@ -141,7 +189,7 @@ graph LR
 
 ---
 
-## 5. Auditable decision trail
+## 6. Auditable decision trail
 
 Every recommendation stores:
 
@@ -158,7 +206,7 @@ LLM telemetry (tokens, latency, cache hits) and all-time usage.
 
 ---
 
-## 6. Self-evaluation results
+## 7. Self-evaluation results
 
 `python -m evaluation.run_eval` (deterministic, no API cost; runs in CI). Full report:
 [`evaluation/results/REPORT.md`](evaluation/results/REPORT.md) · raw: [`latest.json`](evaluation/results/latest.json)
@@ -205,37 +253,59 @@ generalisation test. Injected anomalies are clear-cut. Coverage under the nomina
 little narrow (mostly for irregular income). Measuring the LLM stage needs a Mesh key: `python -m
 evaluation.run_eval --llm`.
 
+**System One (Jev):** `python -m evaluation.run_eval --jev` measures every Jev decision on hand-labelled sets
+(142 merchants, 62 chat messages incl. Hinglish / injection / off-topic, 24 faithfulness pairs, 24 goals, 20 CSV
+columns): accuracy, macro-F1, ECE + reliability table, a threshold chosen on a validation split and reported on a
+held-out test split, option-order flip rate, unsafe-message recall and cost per 1k decisions. The live run records a
+cassette so `--jev-replay` reproduces it offline. The deterministic baselines are measured in every run — the gaps
+Jev has to close:
+
+| Decision | Deterministic path | Measured |
+|---|---|---|
+| Merchant category | lexicon + keywords | 68.3% overall, **26.9%** on the 52 it's unsure about (those go to Jev) |
+| Chat routing | regex router | 50.0%, cannot refuse the 12 unsafe / off-topic / action messages |
+| Faithfulness | numeric grounding check | catches **22%** of unfaithful drafts — 14 of 18 contain no wrong number |
+| Goal type | keyword table | 75% type · 92% spend-vs-keep |
+
+Jev's own numbers are filled in by a live run (this repository never reports a model number it didn't measure).
+
 ---
 
-## 7. Key design decisions
+## 8. Key design decisions
 
-1. **Deterministic-first, LLM where judgment is needed.** Arithmetic, statistics and scheduling are done in code;
+1. **System One decides, System Two writes, code computes.** Closed-set judgments (categories, intents,
+   faithfulness, goal types, column roles) go to Jev with a confidence policy and an audit log; LLMs only generate
+   text; arithmetic, dates and statistics never leave code. See [docs/JEV.md](docs/JEV.md).
+2. **Deterministic-first, LLM where judgment is needed.** Arithmetic, statistics and scheduling are done in code;
    the LLM handles what code can't (unknown merchants, natural language). This keeps the product correct,
    testable and nearly free — and it keeps working when the API key, budget or network doesn't.
-2. **Numbers from code, words from the LLM — enforced.** LLM-written advice, narratives and digests pass a
-   numeric grounding check (`finpilot/llm/grounding.py`): any figure not derivable from the evidence (with
-   rounding, ×12, /12 tolerance) rejects the text and the template is kept. The rejection is recorded in the trail.
-3. **Pay per merchant, not per row.** Uncertain transactions are grouped by merchant and batched (40 merchants per
-   call); results are cached in the DB and reused as "history" for future imports.
-4. **User feedback is a first-class signal.** Category corrections become merchant memory (including prefix
+3. **Numbers from code, words from the LLM — enforced twice.** LLM-written advice, narratives, digests and chat
+   answers pass a numeric grounding check (`finpilot/llm/grounding.py`): any figure not derivable from the evidence
+   (with rounding, ×12, /12 tolerance) rejects the text. They then pass a Jev claim-support check
+   (`finpilot/decisions/guard.py`) that catches invented causes, wrong merchants and boilerplate the numbers can't
+   reveal. Rejections are recorded in the trail and the template is kept.
+4. **Pay per merchant, not per row — once.** Uncertain transactions are grouped by merchant; each unknown merchant
+   gets one Jev decision (or one line in a 40-merchant LLM batch without Jev), stored as a merchant profile and
+   reused as "history" for every future import. Model responses are cached in the DB.
+5. **User feedback is a first-class signal.** Category corrections become merchant memory (including prefix
    matches like "Truffles New Branch"); dismissed advice is snoozed 30 days unless the problem grows ≥25%, and
    repeatedly dismissed kinds are down-weighted; goal advice compares with the previous run ("up from 41% → 63%").
-5. **Common random numbers for what-if**, so "can I afford it?" isn't answered by noise.
-6. **Usage evidence over guesswork.** "Unused subscription" is only claimed when data proves it (a delivery
+6. **Common random numbers for what-if**, so "can I afford it?" isn't answered by noise.
+7. **Usage evidence over guesswork.** "Unused subscription" is only claimed when data proves it (a delivery
    membership with no orders from that merchant in 45+ days) or when the user says so — not from a name.
-7. **Behaviour ≠ one-offs.** Spikes are computed on variable spend with anomalies and fixed bills removed, so a TV
+8. **Behaviour ≠ one-offs.** Spikes are computed on variable spend with anomalies and fixed bills removed, so a TV
    purchase or a bill landing twice in a 30-day window doesn't masquerade as a "habit".
-8. **One coordinator, explicit graph.** LangGraph gives a readable analyse → forecast → advise flow with
+9. **One coordinator, explicit graph.** LangGraph gives a readable analyse → forecast → advise flow with
    conditional routing; the step wrapper gives observability and graceful degradation (non-critical node fails →
    run continues; analysis fails → run aborts with the error recorded).
-9. **Production basics:** pydantic-settings config, SQLite by default / PostgreSQL via `DATABASE_URL`, idempotent
+10. **Production basics:** pydantic-settings config, SQLite by default / PostgreSQL via `DATABASE_URL`, idempotent
    CSV imports (row fingerprints), per-user run locks, optional bearer token, structured JSON logs, Docker image
    with health check and non-root user, CI (ruff, pytest, evaluation, frontend build). Keys live only in env vars —
    never in the database or the UI.
 
 ---
 
-## 8. LLM providers — Mesh by default, bring your own
+## 9. LLM providers — Mesh by default, bring your own
 
 ```python
 # finpilot/llm/providers.py — every provider speaks the OpenAI protocol, so switching is configuration
@@ -264,7 +334,7 @@ client = OpenAI(base_url="https://api.meshapi.ai/v1", api_key=os.getenv("MESH_AP
 
 ---
 
-## 9. API, project layout, deployment
+## 10. API, project layout, deployment
 
 Interactive docs at **`/docs`**. Highlights:
 
@@ -281,18 +351,21 @@ Interactive docs at **`/docs`**. Highlights:
 | `POST /api/chat` | tool-calling assistant (returns the tool trace) |
 | `GET /api/digests` · `POST /api/digests/send-now` · `PUT /api/scheduler` | proactive delivery |
 | `GET/PUT /api/settings…` · `GET /api/llm/models` · `POST /api/settings/llm/test` | profile & provider routing |
+| `GET /api/decisions` · `GET /api/decisions/stats` | System One decision log (probabilities, action taken) + spend & savings by kind |
+| `GET/PUT /api/settings/decisions` · `POST /api/settings/decisions/test` | Jev thresholds, order check, LLM cascade; live connection test |
 | `GET /api/evaluation` | self-evaluation results |
 
 ```
 finpilot/
   agents/       coordinator (LangGraph) · categorizer · analyzer · forecaster · advisor · chat · digest
   domain/       taxonomy · merchant lexicon · description normaliser · recurring detection · stats
+  decisions/    Jev client (Mesh /v1/evaluate) · question specs · confidence policy · faithfulness guard · cost model
   llm/          provider registry · router (fallback, cache, telemetry) · grounding check
   services/     ingestion · synthetic data · repository · toolkit (chat tools) · scheduler · notifier · seed
   api/          FastAPI routers + serializers        main.py · models.py · config.py · db.py
-evaluation/     run_eval.py + results/ (REPORT.md, latest.json)
+evaluation/     run_eval.py · jev_eval.py + jev_cases.py (labelled sets) · results/ (REPORT.md, latest.json)
 frontend/       React 19 + Vite + TypeScript + Tailwind 4 + Recharts + TanStack Query
-tests/          40 tests: domain logic, agents (incl. fake-LLM tool calling & grounding), ingestion, API
+tests/          66 tests: domain logic, agents (fake LLM + simulated /v1/evaluate), Jev client & policy, ingestion, API
 ```
 
 **Deploy for free:** `render.yaml` (Render free web service, Docker), or any Docker host / Hugging Face Docker
@@ -304,9 +377,12 @@ persistence. Run exactly one instance with `SCHEDULER_ENABLED=true`.
 
 ---
 
-## 10. Limitations & roadmap
+## 11. Limitations & roadmap
 
 * Single-tenant by default (`current_user_id` dependency is the seam for real auth / multi-user).
 * No direct bank aggregation (Account Aggregator / Plaid) — CSV and manual entry only.
 * Forecast doesn't model annual seasonality (festivals, bonuses) with < 12 months of history.
 * Category budgets, multi-account/credit-card reconciliation and an Alembic migration history are next.
+* Mesh's `/v1/evaluate` is a **beta** endpoint whose contract may change; the client pins `X-Mesh-Version` and
+  validates requests locally, and every Jev decision has a deterministic fallback. Jev accuracy/calibration figures
+  are pending a live `run_eval --jev` (the development sandbox could not reach the API).
