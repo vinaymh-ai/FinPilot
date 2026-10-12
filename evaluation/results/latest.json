@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-12 12:04",
+  "generated_at": "2026-10-12 21:29",
   "mode": "deterministic (no LLM)",
   "seeds": [
     1,
@@ -312,7 +312,7 @@
   },
   "forecast": {
     "origins": 42,
-    "seconds": 3.1,
+    "seconds": 2.3,
     "metric": "mean |predicted \u2212 actual net cash-flow| as % of monthly income",
     "horizons": {
       "30": {
@@ -424,8 +424,8 @@
       },
       "csv_columns": {
         "cases": 20,
-        "synonym_mapper_accuracy": 0.45,
-        "unmapped": 11
+        "header_vocabulary_accuracy": 0.9,
+        "unmapped": 2
       }
     },
     "request_estimates": {
@@ -456,5 +456,5 @@
     "status": "pending \u2014 no Jev measurements in this run"
   },
   "llm_note": "Deterministic run: no LLM calls were made. Run `python -m evaluation.run_eval --llm` with MESH_API_KEY set to measure the LLM long-tail stage (row 4) on the same data.",
-  "runtime_seconds": 17.6
+  "runtime_seconds": 12.6
 }

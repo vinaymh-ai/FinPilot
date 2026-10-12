@@ -111,12 +111,23 @@ PROVIDERS: dict[str, ProviderSpec] = {
         free_tier=True,
         notes="Runs on your machine — zero cost, fully private.",
     ),
+    "freellmapi": ProviderSpec(
+        name="freellmapi",
+        label="FreeLLMAPI (self-hosted, free)",
+        base_url="http://localhost:3001/v1",
+        key_attr="freellmapi_api_key",
+        default_model="auto",
+        suggested_models=["auto", "auto:smart", "auto:fast"],
+        free_tier=True,
+        notes="Self-hosted router over many free-tier providers; one unified key. Model 'auto' lets it pick.",
+        supports_json_mode=False,  # routed models vary; we parse JSON leniently instead
+    ),
     "custom": ProviderSpec(
         name="custom",
         label="Custom OpenAI-compatible endpoint",
         base_url="",
         key_attr="custom_llm_api_key",
-        default_model="default",
+        default_model="auto",  # set LLM_MODEL / CUSTOM_LLM_MODEL to the gateway's model id
     ),
 }
 
@@ -128,6 +139,8 @@ def resolve_base_url(spec: ProviderSpec, settings: Settings) -> str:
         return settings.ollama_base_url
     if spec.name == "custom":
         return settings.custom_llm_base_url or ""
+    if spec.name == "freellmapi":
+        return settings.freellmapi_base_url or spec.base_url
     return spec.base_url
 
 

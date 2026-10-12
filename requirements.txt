@@ -19,6 +19,14 @@ numpy>=1.26
 # --- Background scheduling (proactive digests) ---
 apscheduler>=3.10,<4
 
+# --- Bank statement import (Excel .xlsx / legacy .xls / PDF e-statements) ---
+openpyxl>=3.1
+xlrd>=2.0
+pdfplumber>=0.11
+
+# --- Observability (optional LangSmith tracing; also a LangGraph dependency) ---
+langsmith>=0.1
+
 # --- Utilities ---
 httpx>=0.27
 tenacity>=8.2

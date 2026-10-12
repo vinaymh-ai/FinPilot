@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from finpilot import __version__
@@ -68,6 +68,16 @@ async def lifespan(app: FastAPI):
     scheduler.shutdown()
 
 
+class ImmutableStaticFiles(StaticFiles):
+    """Vite emits content-hashed file names, so assets can be cached forever."""
+
+    async def get_response(self, path: str, scope):  # type: ignore[override]
+        response = await super().get_response(path, scope)
+        if response.status_code == 200:
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
 def create_app() -> FastAPI:
     s = get_settings()
     app = FastAPI(
@@ -104,14 +114,18 @@ def create_app() -> FastAPI:
 
     dist = Path(s.frontend_dist)
     if (dist / "index.html").exists():
-        app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
+        app.mount("/assets", ImmutableStaticFiles(directory=dist / "assets"), name="assets")
 
         @app.get("/{full_path:path}", include_in_schema=False)
-        async def spa(full_path: str) -> FileResponse:
+        async def spa(full_path: str) -> Response:
+            if full_path.startswith("api/"):
+                return JSONResponse(status_code=404, content={"detail": "Not Found"})
             candidate = dist / full_path
             if full_path and candidate.is_file() and dist in candidate.resolve().parents:
                 return FileResponse(candidate)
-            return FileResponse(dist / "index.html")
+            # The shell must always be revalidated: a cached index.html points at chunk files that a
+            # rebuild has deleted, and the lazy-loaded page then fails to import (a blank screen).
+            return FileResponse(dist / "index.html", headers={"Cache-Control": "no-cache, must-revalidate"})
 
     return app
 

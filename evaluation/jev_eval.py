@@ -53,7 +53,7 @@ from finpilot.domain.normalize import merchant_key
 from finpilot.llm.client import LLMRouter, llm_cost_usd
 from finpilot.llm.grounding import check_grounding
 from finpilot.services.goal_types import rules_goal_type
-from finpilot.services.ingestion import _map_headers
+from finpilot.services.statements.columns import classify
 
 ROOT = Path(__file__).resolve().parent.parent
 CASSETTE = ROOT / "evaluation" / "cassettes" / "jev.json"
@@ -173,19 +173,22 @@ def selective(conf: list[float], correct: list[bool], idx: list[int]) -> list[di
     return rows
 
 
-def pick_threshold(curve: list[dict[str, Any]], target: float, min_coverage: float = 0.2) -> float:
-    """Lowest threshold whose accepted answers reach `target` accuracy on the validation split."""
+def pick_threshold(curve: list[dict[str, Any]], target: float, min_coverage: float = 0.2) -> float | None:
+    """Lowest threshold whose accepted answers reach `target` accuracy on the validation split.
+
+    Falls back to the most accurate threshold that still keeps `min_coverage` of the answers, and
+    returns None when the split has no usable answers at all.
+    """
     for row in curve:
         if row["accuracy"] is not None and row["accuracy"] >= target and row["coverage"] >= min_coverage:
             return row["threshold"]
-    best = max(
-        (r for r in curve if r["accuracy"] is not None and r["coverage"] >= min_coverage),
-        key=lambda r: r["accuracy"],
-    )
-    return best["threshold"]
+    usable = [r for r in curve if r["accuracy"] is not None and r["coverage"] >= min_coverage]
+    return max(usable, key=lambda r: r["accuracy"])["threshold"] if usable else None
 
 
-def at_threshold(conf: list[float], correct: list[bool], idx: list[int], t: float) -> dict[str, Any]:
+def at_threshold(conf: list[float], correct: list[bool], idx: list[int], t: float | None) -> dict[str, Any]:
+    if t is None:
+        return {"threshold": None, "coverage": 0.0, "accuracy_accepted": None, "n": len(idx)}
     kept = [i for i in idx if conf[i] >= t]
     return {
         "threshold": t,
@@ -261,7 +264,11 @@ def baselines() -> dict[str, Any]:
     numeric_catch = [not check_grounding(d, f)[0] for f, d, _, _ in FAITHFULNESS]
     unfaithful = [label != "supported" for _, _, label, _ in FAITHFULNESS]
     gr = [rules_goal_type(n) for n, _, _ in GOALS]
-    csv_map = [next(iter(_map_headers([h]).keys()), "ignore") for h, _, _, _ in CSV_COLUMNS]
+    csv_map = [classify(h) or "ignore" for h, _, _, _ in CSV_COLUMNS]
+    csv_map = [
+        "date" if m == "value_date" else "ignore" if m in ("serial", "reference", "category") else m
+        for m in csv_map
+    ]
     csv_truth = ["ignore" if r in ("reference", "ignore") else r for _, _, r, _ in CSV_COLUMNS]
     return {
         "merchants": {
@@ -308,7 +315,7 @@ def baselines() -> dict[str, Any]:
         },
         "csv_columns": {
             "cases": len(CSV_COLUMNS),
-            "synonym_mapper_accuracy": acc(list(zip(csv_map, csv_truth, strict=True))),
+            "header_vocabulary_accuracy": acc(list(zip(csv_map, csv_truth, strict=True))),
             "unmapped": sum(
                 1 for m, t in zip(csv_map, csv_truth, strict=True) if m == "ignore" and t != "ignore"
             ),
@@ -341,6 +348,67 @@ def request_estimates(s: Settings) -> dict[str, Any]:
 
 
 # ============================================================================ Jev measurements
+class JevEvalError(SystemExit):
+    pass
+
+
+def explain(exc: Exception, client: JevClient) -> str:
+    """Turn a failed /v1/evaluate call into an actionable message."""
+    msg = str(exc)
+    url = client._endpoint()[0]
+    if "HTTP 401" in msg or "HTTP 403" in msg:
+        return (
+            f"{url} rejected the key ({msg[:160]}). Jev runs only on Mesh's /v1/evaluate (MESH_API_KEY=rsk_…) or "
+            "TypeSafe's API (JEV_PROVIDER=typesafe + TYPESAFE_API_KEY). Keys for other gateways (FreeLLMAPI, "
+            "OpenRouter, …) cannot call Jev — they only serve chat completions."
+        )
+    if "HTTP 402" in msg:
+        return f"Mesh says the account has no credits ({msg[:160]}). Top up at meshapi.ai, then re-run."
+    if "HTTP 404" in msg or "model_not_found" in msg:
+        return f"The model {client.model} is not available at {url} ({msg[:160]}). Check JEV_MODEL / JEV_PROVIDER."
+    if "network error" in msg:
+        return f"Could not reach {url} ({msg[:200]}). Check your internet connection, proxy or firewall."
+    return f"{url} failed: {msg[:300]}"
+
+
+def preflight(client: JevClient) -> dict[str, Any]:
+    """One tiny live decision before spending minutes on the full run."""
+    from finpilot.decisions.jev import Choice
+
+    try:
+        ev = client.evaluate(
+            {"statement_text": "POS 4412XXXXXX9921 STARBUCKS INDIRANAGAR", "amount": "small (under ₹500)"},
+            {
+                "category": Choice(
+                    "Which category?", {"dining": "Cafés and restaurants", "groceries": "Supermarkets"}
+                )
+            },
+            agent="eval",
+            purpose="preflight",
+            cache=False,
+        )
+    except JevError as exc:
+        raise JevEvalError(f"Jev preflight failed — {explain(exc, client)}") from exc
+    return {
+        "answer": ev["category"].choice,
+        "confidence": round(ev["category"].confidence, 3),
+        "model": ev.model,
+    }
+
+
+def failure_summary(evals: list[Any]) -> dict[str, Any]:
+    errors = [str(e) for e in evals if not isinstance(e, Evaluation)]
+    distinct = list(dict.fromkeys(e[:240] for e in errors))
+    return {"requests": len(evals), "failed": len(errors), "errors": distinct[:3]}
+
+
+def _all_failed(evals: list[Any], label: str) -> dict[str, Any] | None:
+    f = failure_summary(evals)
+    if f["requests"] and f["failed"] == f["requests"]:
+        return {"status": f"failed — all {f['requests']} {label} requests errored", **f}
+    return None
+
+
 def _answers(evals: list[Any], name: str) -> list[ChoiceAnswer | None]:
     return [e.answers.get(name) if isinstance(e, Evaluation) else None for e in evals]
 
@@ -348,6 +416,8 @@ def _answers(evals: list[Any], name: str) -> list[ChoiceAnswer | None]:
 def eval_merchants(client: CassetteJev, s: Settings) -> dict[str, Any]:
     cases, jobs = merchant_jobs()
     evals = client.evaluate_many(jobs, agent="eval", purpose="merchant_category")
+    if (failed := _all_failed(evals, "merchant")) is not None:
+        return failed
     ans = _answers(evals, "category")
     ok_idx = [i for i, a in enumerate(ans) if a is not None]
     truth = [c["category"] for c in cases]
@@ -425,6 +495,8 @@ def eval_merchants(client: CassetteJev, s: Settings) -> dict[str, Any]:
 def eval_chat(client: CassetteJev, s: Settings) -> dict[str, Any]:
     jobs = chat_jobs()
     evals = client.evaluate_many(jobs, agent="eval", purpose="chat_route")
+    if (failed := _all_failed(evals, "chat")) is not None:
+        return failed
     ok = [i for i, e in enumerate(evals) if isinstance(e, Evaluation)]
     truth = [t for _, t, _ in CHAT]
     ans = _answers(evals, "intent")
@@ -480,6 +552,8 @@ def eval_chat(client: CassetteJev, s: Settings) -> dict[str, Any]:
 def eval_faithfulness(client: CassetteJev, s: Settings) -> dict[str, Any]:
     jobs = faith_jobs()
     evals = client.evaluate_many(jobs, agent="eval", purpose="faithfulness")
+    if (failed := _all_failed(evals, "faithfulness")) is not None:
+        return failed
     ok = [i for i, e in enumerate(evals) if isinstance(e, Evaluation)]
     labels = [label for _, _, label, _ in FAITHFULNESS]
     ans = _answers(evals, "support")
@@ -519,6 +593,8 @@ def eval_faithfulness(client: CassetteJev, s: Settings) -> dict[str, Any]:
 def eval_goals(client: CassetteJev, s: Settings) -> dict[str, Any]:
     jobs = goal_jobs()
     evals = client.evaluate_many(jobs, agent="eval", purpose="goal_type")
+    if (failed := _all_failed(evals, "goal")) is not None:
+        return failed
     ok = [i for i, e in enumerate(evals) if isinstance(e, Evaluation)]
     spend_pred = []
     for i in ok:
@@ -539,6 +615,8 @@ def eval_goals(client: CassetteJev, s: Settings) -> dict[str, Any]:
 def eval_csv(client: CassetteJev, s: Settings) -> dict[str, Any]:
     jobs = csv_jobs()
     evals = client.evaluate_many(jobs, agent="eval", purpose="csv_column")
+    if (failed := _all_failed(evals, "CSV column")) is not None:
+        return failed
     ok = [i for i, e in enumerate(evals) if isinstance(e, Evaluation)]
     return {
         "cases": len(CSV_COLUMNS),
@@ -579,6 +657,8 @@ def run(mode: str | None) -> dict[str, Any]:
         return out
     if mode == "live" and not client.available():
         raise SystemExit("--jev needs MESH_API_KEY (or JEV_PROVIDER=typesafe + TYPESAFE_API_KEY)")
+    if mode == "live":
+        out["preflight"] = preflight(client)
     out.update(
         {
             "status": f"measured ({'recorded live' if mode == 'live' else 'replayed from cassette'})",
@@ -592,6 +672,13 @@ def run(mode: str | None) -> dict[str, Any]:
         }
     )
     client.save()
+    broken = [
+        k
+        for k in ("merchants", "chat", "faithfulness", "goals", "csv_columns")
+        if "failed" in out[k].get("status", "")
+    ]
+    if broken:
+        out["status"] = f"partially measured — {', '.join(broken)} failed (see errors)"
     return out
 
 
@@ -617,7 +704,7 @@ def render(j: dict[str, Any]) -> list[str]:
         f"{b['faithfulness']['unfaithful_without_numbers']} contain no wrong number at all |",
         f"| Goal type ({b['goals']['cases']} goal names) | keyword table | type {b['goals']['keyword_type_accuracy'] * 100:.0f}%, "
         f"spend-vs-keep {b['goals']['keyword_spend_accuracy'] * 100:.0f}% |",
-        f"| CSV columns ({b['csv_columns']['cases']} headers) | synonym list | {b['csv_columns']['unmapped']} headers "
+        f"| CSV columns ({b['csv_columns']['cases']} headers) | header vocabulary | {b['csv_columns']['unmapped']} headers "
         f"unrecognised |",
         "",
         "### Cost per 1,000 decisions (request sizes measured from the real request bodies; ≈4 chars/token)",
@@ -633,6 +720,17 @@ def render(j: dict[str, Any]) -> list[str]:
     lines.append("")
     if "merchants" not in j:
         lines += [f"Jev accuracy, calibration and thresholds: **pending** — {j['how_to_run']}.", ""]
+        return lines
+    sections = {k: j[k] for k in ("merchants", "chat", "faithfulness", "goals", "csv_columns")}
+    failed = {k: v for k, v in sections.items() if "failed" in str(v.get("status", ""))}
+    if failed:
+        lines += ["### Jev run problems", ""]
+        lines += [f"- **{k}**: {v['status']} — {'; '.join(v.get('errors', []))}" for k, v in failed.items()]
+        lines += [
+            "",
+            "Detailed tables are skipped until every section is measured (raw results are in latest.json).",
+            "",
+        ]
         return lines
     m, c, f, g, cv = j["merchants"], j["chat"], j["faithfulness"], j["goals"], j["csv_columns"]
     ts = m["threshold_selection"]
@@ -652,7 +750,8 @@ def render(j: dict[str, Any]) -> list[str]:
         f"| CSV column role | {cv['role_accuracy'] * 100:.0f}% | {b['csv_columns']['unmapped']} unmapped | |",
         "",
         f"**Threshold (categories):** chosen on the validation split for ≥95% accepted accuracy → "
-        f"**{ts['chosen_on_validation']:.2f}**. On the held-out test split: coverage "
+        f"**{ts['chosen_on_validation'] if ts['chosen_on_validation'] is not None else 'none usable'}**. On the "
+        f"held-out test split: coverage "
         f"{ts['test_at_chosen']['coverage'] * 100:.0f}%, accepted accuracy "
         f"{(ts['test_at_chosen']['accuracy_accepted'] or 0) * 100:.1f}%; production policy (Jev if confident, rules "
         f"otherwise) {(ts['test_policy_accuracy_at_chosen'] or 0) * 100:.1f}% vs rules-only "

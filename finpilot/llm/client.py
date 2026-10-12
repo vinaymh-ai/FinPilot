@@ -176,6 +176,8 @@ class LLMRouter:
         if primary_name == env_provider:
             # env-level defaults only make sense for the provider they were written for
             candidates += [self._agent_default_model(agent), self.settings.llm_model]
+        if primary_name == "custom":
+            candidates.append(self.settings.custom_llm_model)
         primary = PROVIDERS.get(primary_name)
         out: list[tuple[ProviderSpec, str]] = []
         if primary is not None:
@@ -184,7 +186,8 @@ class LLMRouter:
         for name in self.settings.fallback_provider_list:
             spec = PROVIDERS.get(name)
             if spec and spec.name != primary_name:
-                out.append((spec, spec.default_model))
+                model = self.settings.custom_llm_model if name == "custom" else None
+                out.append((spec, model or spec.default_model))
         return [(s, m) for s, m in out if is_configured(s, self.settings)]
 
     def available(self, agent: str = "advisor") -> bool:

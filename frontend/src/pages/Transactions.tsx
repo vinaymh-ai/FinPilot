@@ -1,19 +1,137 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, FileUp, Plus, Receipt, Repeat, Search, TriangleAlert, Upload, Zap } from "lucide-react";
+import { CheckCircle2, ChevronLeft, ChevronRight, FileUp, KeyRound, Plus, Receipt, Repeat, Search, TriangleAlert, Upload, X, Zap } from "lucide-react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { CategoryPill, SourceBadge } from "../components/domain";
 import { Badge, Button, Card, Drawer, Empty, Input, Label, PageHeader, Select, Skeleton, Toggle } from "../components/ui";
-import { api } from "../lib/api";
+import { ApiError, api } from "../lib/api";
 import { cn, date, money } from "../lib/format";
 import { useMeta, useRefreshAll } from "../lib/hooks";
 import type { Txn } from "../lib/types";
 
 type Page = { total: number; page: number; page_size: number; items: Txn[]; sources: Record<string, number> };
-type UploadResp = {
-  batch: { imported: number; duplicates: number; invalid: number; total: number; errors: string[]; warnings: string[]; mapping: Record<string, string> };
-  run: { run_id: number; summary: Record<string, any> } | null;
+type ImportSummary = {
+  format: string;
+  rows: number;
+  date_range: [string, string] | null;
+  money_in: number;
+  money_out: number;
+  checks: { balance_checked?: number; balance_reconciled?: number; balance_reconciled_pct?: number };
 };
+type UploadBatch = {
+  filename: string;
+  format: string;
+  imported: number;
+  duplicates: number;
+  invalid: number;
+  total: number;
+  errors: string[];
+  warnings: string[];
+  mapping: Record<string, string>;
+  summary: ImportSummary;
+};
+type UploadResp = { batch: UploadBatch; run: { run_id: number; summary: Record<string, any> } | null };
+type UploadError = { message: string; code?: string; errors?: string[]; warnings?: string[]; mapping?: Record<string, string>; format?: string; filename?: string };
+
+const ACCEPT = ".csv,.tsv,.txt,.xls,.xlsx,.xlsm,.htm,.html,.pdf";
+const ROLE_LABEL: Record<string, string> = {
+  date: "Date",
+  value_date: "Value date",
+  description: "Description",
+  debit: "Money out",
+  credit: "Money in",
+  amount: "Amount",
+  type: "Dr/Cr",
+  balance: "Balance",
+  reference: "Reference",
+  time: "Time",
+  serial: "Serial",
+  account: "Account",
+  category: "Category",
+};
+
+function ImportReport({ batch, onClose }: { batch: UploadBatch; onClose: () => void }) {
+  const s = batch.summary;
+  const pct = s?.checks?.balance_reconciled_pct;
+  return (
+    <Card className="mb-5 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-2 font-semibold">
+          <CheckCircle2 className="size-4 text-emerald-500" /> Imported {batch.imported} of {batch.total} transactions from {batch.filename}
+          <Badge>{batch.format?.toUpperCase()}</Badge>
+        </div>
+        <button onClick={onClose} className="text-muted hover:text-ink" aria-label="Close">
+          <X className="size-4" />
+        </button>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-[12.5px] text-muted">
+        {s?.date_range && (
+          <span>
+            {date(s.date_range[0], true)} → {date(s.date_range[1], true)}
+          </span>
+        )}
+        <span>money in {money(s?.money_in)}</span>
+        <span>money out {money(s?.money_out)}</span>
+        <span>{batch.duplicates} duplicates skipped</span>
+        {batch.invalid > 0 && <span className="text-amber-600">{batch.invalid} rows unreadable</span>}
+        {pct != null && (
+          <span className={pct >= 99 ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600"}>
+            balance check {s.checks.balance_reconciled}/{s.checks.balance_checked} rows reconcile ({pct}%)
+          </span>
+        )}
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {Object.entries(batch.mapping).map(([role, header]) => (
+          <Badge key={role} tone="blue" title={`column "${header}"`}>
+            {ROLE_LABEL[role] ?? role}: {header}
+          </Badge>
+        ))}
+      </div>
+      {[...batch.warnings, ...batch.errors].length > 0 && (
+        <ul className="mt-2 list-disc space-y-0.5 pl-5 text-[12px] text-amber-700 dark:text-amber-400">
+          {[...batch.warnings, ...batch.errors].slice(0, 8).map((w, i) => (
+            <li key={i}>{w}</li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
+function ImportError({ err, onClose }: { err: UploadError; onClose: () => void }) {
+  return (
+    <Card className="mb-5 border-red-500/30 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-2 font-semibold text-red-600 dark:text-red-400">
+          <TriangleAlert className="size-4" /> {err.message}
+          {err.filename && <span className="font-normal text-muted">— {err.filename}</span>}
+        </div>
+        <button onClick={onClose} className="text-muted hover:text-ink" aria-label="Close">
+          <X className="size-4" />
+        </button>
+      </div>
+      {err.mapping && Object.keys(err.mapping).length > 0 && (
+        <div className="mt-2 text-[12.5px] text-muted">
+          Columns recognised:{" "}
+          {Object.entries(err.mapping)
+            .map(([r, h]) => `${ROLE_LABEL[r] ?? r} = "${h}"`)
+            .join(", ")}
+        </div>
+      )}
+      {(err.errors?.length ?? 0) > 0 && (
+        <ul className="mt-2 list-disc space-y-0.5 pl-5 text-[12px] text-muted">
+          {err.errors!.slice(0, 8).map((e, i) => (
+            <li key={i}>{e}</li>
+          ))}
+        </ul>
+      )}
+      <p className="mt-2 text-[12px] text-muted">
+        Supported: CSV/TSV/TXT, Excel (.xlsx/.xls), HTML-as-XLS and PDF e-statements from any bank. Scanned PDFs (images) can't be read —
+        download the e-statement or export CSV/Excel from net banking.
+      </p>
+    </Card>
+  );
+}
 
 export default function Transactions() {
   const { data: meta } = useMeta();
@@ -27,6 +145,10 @@ export default function Transactions() {
   const [adding, setAdding] = useState(false);
   const [drag, setDrag] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [report, setReport] = useState<UploadBatch | null>(null);
+  const [uploadErr, setUploadErr] = useState<UploadError | null>(null);
+  const [locked, setLocked] = useState<{ file: File; code: string } | null>(null);
+  const [password, setPassword] = useState("");
 
   const params = new URLSearchParams({ page: String(page), page_size: "40" });
   if (q) params.set("q", q);
@@ -40,19 +162,35 @@ export default function Transactions() {
   });
 
   const upload = useMutation({
-    mutationFn: (file: File) => {
+    mutationFn: ({ file, password }: { file: File; password?: string }) => {
       const fd = new FormData();
       fd.append("file", file);
+      if (password) fd.append("password", password);
       return api.upload<UploadResp>("/transactions/upload", fd);
     },
+    onMutate: () => {
+      setUploadErr(null);
+      setReport(null);
+    },
     onSuccess: (r) => {
+      setLocked(null);
+      setPassword("");
+      setReport(r.batch);
       toast.success(`Imported ${r.batch.imported} transactions`, {
         description: `${r.batch.duplicates} duplicates skipped · ${r.batch.invalid} invalid${r.run ? ` · agents ran (#${r.run.run_id})` : ""}`,
       });
-      r.batch.warnings.forEach((w) => toast.warning(w));
       refresh();
     },
-    onError: (e: Error) => toast.error("Upload failed", { description: e.message }),
+    onError: (e: Error, vars) => {
+      const detail = (e instanceof ApiError && typeof e.detail === "object" && e.detail ? e.detail : { message: e.message }) as UploadError;
+      if (detail.code === "password_required" || detail.code === "password_incorrect") {
+        setLocked({ file: vars.file, code: detail.code });
+        if (detail.code === "password_incorrect") toast.error("That password didn't open the PDF");
+        return;
+      }
+      setUploadErr(detail);
+      toast.error("Upload failed", { description: detail.message });
+    },
   });
 
   const recat = useMutation({
@@ -69,8 +207,10 @@ export default function Transactions() {
   const onFiles = (files: FileList | null) => {
     const f = files?.[0];
     if (!f) return;
-    if (!f.name.toLowerCase().endsWith(".csv")) return toast.error("Please upload a .csv file");
-    upload.mutate(f);
+    const ext = "." + (f.name.toLowerCase().split(".").pop() ?? "");
+    if (!ACCEPT.split(",").includes(ext)) return toast.error("Unsupported file", { description: `Upload a statement as ${ACCEPT.replaceAll(",", " ")}` });
+    setLocked(null);
+    upload.mutate({ file: f });
   };
   const pages = data ? Math.max(1, Math.ceil(data.total / data.page_size)) : 1;
 
@@ -85,9 +225,18 @@ export default function Transactions() {
               <Plus className="size-4" /> Add manually
             </Button>
             <Button variant="primary" loading={upload.isPending} onClick={() => fileRef.current?.click()}>
-              <Upload className="size-4" /> Upload CSV
+              <Upload className="size-4" /> Upload statement
             </Button>
-            <input ref={fileRef} type="file" accept=".csv,text/csv" hidden onChange={(e) => onFiles(e.target.files)} />
+            <input
+              ref={fileRef}
+              type="file"
+              accept={ACCEPT}
+              hidden
+              onChange={(e) => {
+                onFiles(e.target.files);
+                e.target.value = "";
+              }}
+            />
           </>
         }
       />
@@ -110,13 +259,42 @@ export default function Transactions() {
       >
         <FileUp className="size-5" />
         <span>
-          Drop a bank statement CSV here — HDFC/ICICI/SBI exports, Debit/Credit or signed Amount columns, dd/mm or mm/dd
-          dates all work. Re-uploading the same file adds nothing.
+          Drop a bank statement here — <b>CSV, Excel (.xlsx/.xls) or PDF</b> from any bank (HDFC, ICICI, SBI, Axis, Kotak…).
+          Preambles, Debit/Credit or signed amounts, any date style and password-protected PDFs all work. Re-uploading adds nothing.
         </span>
         <a href="/sample_transactions.csv" download className="text-brand hover:underline">
           sample file
         </a>
       </div>
+
+      {locked && (
+        <Card className="mb-5 p-4">
+          <form
+            className="flex flex-wrap items-end gap-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (password) upload.mutate({ file: locked.file, password });
+            }}
+          >
+            <div className="min-w-[240px] flex-1">
+              <Label hint="(often your date of birth or customer ID — it's used once and never stored)">
+                <span className="inline-flex items-center gap-1.5">
+                  <KeyRound className="size-3.5" /> {locked.file.name} is password-protected
+                </span>
+              </Label>
+              <Input type="password" autoFocus value={password} onChange={(e) => setPassword(e.target.value)} placeholder="PDF password" />
+            </div>
+            <Button variant="primary" type="submit" loading={upload.isPending}>
+              Unlock & import
+            </Button>
+            <Button type="button" variant="ghost" onClick={() => (setLocked(null), setPassword(""))}>
+              Cancel
+            </Button>
+          </form>
+        </Card>
+      )}
+      {report && <ImportReport batch={report} onClose={() => setReport(null)} />}
+      {uploadErr && <ImportError err={uploadErr} onClose={() => setUploadErr(null)} />}
 
       <Card className="mb-4 p-3">
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-[1fr_180px_160px_auto]">

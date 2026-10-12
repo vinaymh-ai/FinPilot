@@ -205,7 +205,10 @@ def merchant_key(description: str) -> tuple[str, str]:
 
 def looks_like_person(description: str) -> bool:
     """Heuristic: a UPI payee that looks like a personal name (P2P transfer), not a business."""
-    payee, _ = _upi_payee(description)
-    if not payee:
+    payee, handle = _upi_payee(description)
+    if not payee or _BUSINESS_HINT.search(payee):
         return False
-    return bool(_PERSON_HINT.fullmatch(payee)) and not _BUSINESS_HINT.search(payee)
+    if _PERSON_HINT.fullmatch(payee):
+        return True
+    # one-word names are common in India ("HANUMANTHA"); a phone-number UPI handle confirms a person
+    return bool(re.fullmatch(r"[A-Z]{3,15}", payee) and handle and re.fullmatch(r"\d{10}", handle))

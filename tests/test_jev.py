@@ -414,14 +414,24 @@ def test_spend_goal_leaves_the_account_reserve_goal_does_not():
 def test_unfamiliar_csv_headers_mapped_by_jev_and_verified(fake_jev_factory):
     from finpilot.services.ingestion import parse_csv
 
-    roles = {"Txn Posted On": "date", "Narrative": "description", "Amt in Rs": "amount", "Ref No": "date"}
+    # headers no vocabulary knows; Jev also (wrongly) claims "Code" is a date — code must reject that
+    roles = {"When": "date", "What": "description", "How much": "amount", "Code": "date"}
     _, client = fake_jev_factory({"role": lambda s, k: roles.get(s["column_header"])})
-    csv_text = "Txn Posted On,Narrative,Amt in Rs,Ref No\n2026-10-01,SWIGGY ORDER,-450,AB12\n2026-10-02,SALARY,90000,CD34\n"
+    csv_text = (
+        "Personal export\n\nCode,When,What,How much\nAB12,2026-10-01,SWIGGY ORDER,-450\n"
+        "CD34,2026-10-02,SALARY,90000\nEF56,2026-10-03,RENT,-25000\n"
+    )
     res = parse_csv(csv_text, jev=client)
-    assert not res.errors and len(res.rows) == 2
-    assert res.mapping == {"date": "Txn Posted On", "description": "Narrative", "amount": "Amt in Rs"}
-    assert any("Jev" in w for w in res.warnings)  # 'Ref No' claimed to be a date but failed verification
-    assert parse_csv(csv_text, use_jev=False).errors  # without Jev the file is rejected as before
+    assert not res.errors and [r.amount for r in res.rows] == [-450.0, 90000.0, -25000.0]
+    assert (
+        res.mapping["date"] == "When"
+        and res.mapping["description"] == "What"
+        and res.mapping["amount"] == "How much"
+    )
+    assert sum("Jev" in w for w in res.warnings) == 3  # three accepted; 'Code' failed verification
+    plain = parse_csv(csv_text, use_jev=False)  # without Jev: columns guessed from their contents
+    assert [r.amount for r in plain.rows] == [-450.0, 90000.0, -25000.0]
+    assert any("inferred from their contents" in w for w in plain.warnings)
 
 
 # ============================================================================ costs + API

@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434/v1"
     custom_llm_base_url: str | None = None
     custom_llm_api_key: str | None = None
+    custom_llm_model: str | None = None
+    freellmapi_base_url: str = "http://localhost:3001/v1"
+    freellmapi_api_key: str | None = None
 
     # --- System One decisions (Jev) ---------------------------------------------------------
     # Closed-set judgments (which category, which intent, is this rewrite faithful?) go to

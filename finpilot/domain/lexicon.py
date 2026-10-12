@@ -200,9 +200,10 @@ MERCHANT_RULES: list[MerchantRule] = [
         "education",
     ),
     # ---- Travel -------------------------------------------------------------------------------
-    R(r"MAKEMYTRIP|MAKE ?MY ?TRIP|MMT", "MakeMyTrip", "travel"),
+    # "MMT/IMPS" is ICICI's Mobile Money Transfer, not MakeMyTrip
+    R(r"MAKEMYTRIP|MAKE ?MY ?TRIP|MMT(?! ?IMPS)", "MakeMyTrip", "travel"),
     R(r"GOIBIBO|CLEARTRIP|YATRA|IXIGO|EASEMYTRIP", "Travel booking", "travel"),
-    R(r"IRCTC", "IRCTC", "travel"),
+    R(r"IRCTC|INDIAN ?RAIL(WAYS?)?|INDIAN ?RAI", "IRCTC", "travel"),
     R(
         r"INDIGO|INTERGLOBE|AIR ?INDIA|VISTARA|SPICEJET|AKASA|EMIRATES|LUFTHANSA|UNITED ?AIRLINES",
         "Airline",
@@ -230,6 +231,12 @@ MERCHANT_RULES: list[MerchantRule] = [
         "Loan EMI",
         "loans",
     ),
+    # ---- Bank-to-bank transfers (family, own accounts) ----------------------------------------
+    R(
+        r"MMT ?IMPS|TRANSFER ?TO ?FAM|SELF ?TRANSFER|OWN ?ACCOUNT|FUND ?TRANSFER",
+        "Bank transfer",
+        "transfers",
+    ),
     # ---- Credit card bill payments are transfers (spend already counted on the card) ----------
     R(
         r"CRED ?CLUB|CREDIT ?CARD ?(BILL|PAYMENT)|CC ?BILL ?PAY|CARD ?BILL ?PAYMENT",
@@ -250,7 +257,9 @@ MERCHANT_RULES: list[MerchantRule] = [
         "investments",
     ),
     R(
-        r"BSE ?STAR ?MF|MUTUAL ?FUND|SIP ?(DEBIT|INSTALLMENT)?|NPS ?TRUST|PPF ?DEPOSIT|RECURRING ?DEPOSIT",
+        # ICCL = Indian Clearing Corporation, which collects mutual-fund SIP autopays
+        r"BSE ?STAR ?MF|MUTUAL ?FUND|SIP ?(DEBIT|INSTALLMENT)?|NPS ?TRUST|PPF ?DEPOSIT|RECURRING ?DEPOSIT|"
+        r"ICCL|INDIAN ?CLEARING|MF ?AUTOPAY|CAMS|KFINTECH|KARVY",
         "SIP / MF",
         "investments",
     ),
