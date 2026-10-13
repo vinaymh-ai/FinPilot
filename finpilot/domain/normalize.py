@@ -149,6 +149,59 @@ def normalize_text(description: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def payment_provider(description: str) -> str | None:
+    """Payment rails do not identify what was bought; never treat them as the purchase category."""
+    payee, _ = _upi_payee(description)
+    probe = payee or description
+    for pattern, name in (
+        (r"\b(?:GOKIWI|KIWI)\b", "Kiwi"),
+        (r"\bCRED(?:\s+CLUB)?\b", "CRED"),
+        (r"\bRAZORPAY\b", "Razorpay"),
+        (r"\bPAYU\b", "PayU"),
+        (r"\bCASHFREE\b", "Cashfree"),
+        (r"\bPHONEPE\b", "PhonePe"),
+        (r"\bPAYTM\b", "Paytm"),
+    ):
+        if re.search(pattern, probe, re.IGNORECASE):
+            return name
+    return None
+
+
+def is_card_repayment(description: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(?:CREDIT\s*CARD|CC|CARD)\s*(?:BILL|PAYMENT|REPAYMENT|SETTLEMENT)\b|"
+            r"\b(?:ICICI|HDFC|SBI|AXIS|KOTAK)\s+CRED(?:IT\s*CARD)?\b",
+            normalize_text(description),
+        )
+    )
+
+
+def merchant_matches(query: str, merchant: str, description: str) -> bool:
+    """Match whole name tokens, so 'Ram' does not match 'Ramesh' or a bank/reference substring."""
+    needle = normalize_text(query)
+    if not needle:
+        return False
+    pattern = r"\s*".join(re.escape(token) for token in needle.split())
+    payee, _ = _upi_payee(description)
+    names = [merchant, payee or ""]
+    if payment_provider(description):
+        purpose = match_merchant(normalize_text(description))
+        if purpose and purpose.category not in {"income", "transfers", "loans", "credit_card_payment"}:
+            names.append(purpose.name)
+    if any(re.search(rf"(?<!\w){pattern}(?!\w)", normalize_text(name)) for name in names):
+        return True
+    # A full name in a compact remark can expand a truncated payee. Require the
+    # same first name, so bank/sender metadata cannot identify an unrelated payee.
+    tokens = needle.split()
+    roots = {words[0] for name in names if (words := normalize_text(name).split())}
+    return bool(
+        len(tokens) > 1
+        and tokens[0] in roots
+        and re.search(rf"(?<!\w){pattern}(?!\w)", normalize_text(description))
+    )
+
+
 def _upi_payee(description: str) -> tuple[str | None, str | None]:
     """Return (payee_name, vpa_handle) for UPI-style descriptions."""
     up = description.upper()
@@ -196,9 +249,13 @@ def merchant_key(description: str) -> tuple[str, str]:
     """Return (merchant_display_name, normalised_text)."""
     norm = normalize_text(description)
     payee, handle = _upi_payee(description)
-    probe = " ".join(x for x in (norm, handle or "") if x)
+    provider = payment_provider(description)
+    if provider:
+        return provider, norm
+    # Bank names and remittance notes elsewhere in a UPI narration are not the payee.
+    probe = " ".join(x for x in (payee or norm, handle or "") if x)
     rule = match_merchant(probe)
-    if rule is not None:
+    if rule is not None and rule.name != "Credit card payment":
         return rule.name, norm
     return clean_merchant(description), norm
 

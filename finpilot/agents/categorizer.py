@@ -5,19 +5,19 @@ Cascade (cheapest, most certain first):
     2. history  — how this merchant was categorised before (by Jev, the LLM or the user)
     3. rule     — curated merchant lexicon (≈200 Indian + global brands)
     4. keyword  — generic token evidence ("MEDICALS", "PETROL", "SALON"), amount- and sign-aware
-    5. jev      — System One decision per *unique merchant*, only for what is still uncertain:
-                  category + payee type + service family in one request, all merchants in
-                  parallel. Answers below the confidence threshold are deferred (the rules
-                  answer stands) — or, if `CATEGORIZER_ESCALATE_TO_LLM`, cascaded to the LLM.
-       llm      — the batched LLM classifier, used only when Jev is not configured
-    6. pattern  — post-pass: an unknown merchant charging the same amount every month is a
-                  subscription, whatever its name says
+    5. llm      — semantic reasoning over unresolved narrations, amounts, dates and context
+    6. jev      — category + payee type + service family for remaining uncertainty; an optional
+                  LLM retry follows deferred decisions
+    7. pattern  — recurring cadence supports a subscription only when the description also
+                  identifies a subscription or membership; cadence alone cannot prove purpose
 The output therefore genuinely depends on each transaction's text, amount, sign and history.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import math
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
@@ -27,7 +27,7 @@ from finpilot.decisions.jev import ChoiceAnswer, Evaluation
 from finpilot.decisions.policy import DecisionRecord, log_decisions, order_debias_many, record
 from finpilot.decisions.spec import merchant_questions, merchant_state
 from finpilot.domain.lexicon import keyword_scores, match_merchant
-from finpilot.domain.normalize import looks_like_person, merchant_key
+from finpilot.domain.normalize import is_card_repayment, looks_like_person, merchant_key, payment_provider
 from finpilot.domain.recurring import TxnLite, detect_recurring
 from finpilot.domain.taxonomy import BY_ID, CATEGORIES, CATEGORY_IDS
 
@@ -117,8 +117,15 @@ Assign each one exactly ONE category id from this taxonomy:
 Guidelines:
 - Use world knowledge of brands and Indian retail (e.g. "TRUFFLES" is a Bengaluru restaurant chain, "GREEN TRENDS" is a salon chain, "CHUMBAK" is a lifestyle store).
 - In India "HOTEL <name>" with a small amount is usually a restaurant (dining); with a large amount it is lodging (travel).
-- A person's name paid via UPI is a person-to-person transfer ("transfers") unless the note says otherwise (e.g. RENT).
-- Credits (positive amounts) are usually income, refunds or transfers.
+- A name alone does not prove a transfer: individuals can be landlords, shops or service providers.
+- Separate the payment channel (UPI, bank, payment platform) from the economic purpose.
+- Infer purpose using the complete narration, the payee's known business/products, direction,
+  amount and related transactions. A bill-paying platform can indicate a credit-card repayment
+  even when the bank's truncated narration omits the words "credit card". Explain the evidence
+  and distinguish an inference from an explicit statement. Prefer a specific purchase/rent
+  purpose when the narration supplies one; payment platforms can offer multiple services.
+- Never infer a subscription from cadence alone.
+- A positive amount alone does not prove income: it can be a refund or own-account transfer.
 - If you genuinely cannot tell, answer "other" with a low confidence.
 Respond with JSON only: {{"results": [{{"id": <id>, "category": "<category id>", "confidence": <0..1>, "merchant": "<clean merchant name>", "reason": "<max 12 words>"}}]}}"""
 
@@ -137,7 +144,7 @@ class CategorizerAgent(BaseAgent):
         *args: Any,
         memory: dict[str, str] | None = None,
         history: dict[str, str] | None = None,
-        batch_size: int = 40,
+        batch_size: int = 12,
         currency: str = "INR",
         **kwargs: Any,
     ):
@@ -152,7 +159,8 @@ class CategorizerAgent(BaseAgent):
     def rule_categorize(self, item: CatItem) -> CatResult:
         merchant, norm = merchant_key(item.description)
         mk = merchant.upper()
-        if mk in self.memory:
+        provider = payment_provider(item.description)
+        if mk in self.memory and not provider:
             return CatResult(
                 item.key,
                 merchant,
@@ -162,7 +170,7 @@ class CategorizerAgent(BaseAgent):
                 f"You previously categorised {merchant} as {BY_ID[self.memory[mk]].label}",
             )
         similar = next((k for k in self.memory if len(k) >= 4 and mk.startswith(k + " ")), None)
-        if similar:
+        if similar and not provider:
             cat = self.memory[similar]
             return CatResult(
                 item.key,
@@ -172,7 +180,7 @@ class CategorizerAgent(BaseAgent):
                 0.9,
                 f"Looks like {similar.title()}, which you categorised as {BY_ID[cat].label}",
             )
-        if mk in self.history:
+        if mk in self.history and not provider:
             cat = self.history[mk]
             return CatResult(
                 item.key,
@@ -184,6 +192,46 @@ class CategorizerAgent(BaseAgent):
             )
 
         credit = item.amount > 0
+        if is_card_repayment(item.description):
+            return CatResult(
+                item.key,
+                merchant,
+                "credit_card_payment",
+                "rule",
+                0.95,
+                "Explicit credit-card repayment evidence in the statement",
+            )
+        if provider:
+            purpose = match_merchant(norm)
+            if purpose and purpose.category not in {"transfers", "income", "credit_card_payment"}:
+                return CatResult(
+                    item.key,
+                    merchant,
+                    purpose.category,
+                    "rule",
+                    0.9,
+                    f"Explicit purpose: {purpose.name} identified behind {provider}",
+                )
+            scores = keyword_scores(norm)
+            if scores:
+                category, confidence = max(scores.items(), key=lambda item: item[1])
+                if confidence >= 0.85 and category not in {"transfers", "income"}:
+                    return CatResult(
+                        item.key,
+                        merchant,
+                        category,
+                        "keyword",
+                        confidence,
+                        f"Explicit purpose: {BY_ID[category].label} in the payment note",
+                    )
+            return CatResult(
+                item.key,
+                merchant,
+                "other",
+                "review",
+                0.3,
+                f"{provider} is a payment intermediary; purchase or bill purpose needs confirmation",
+            )
         rule = match_merchant(norm)
         if rule is not None and not (rule.category == "income" and not credit):
             cat = rule.category
@@ -197,10 +245,10 @@ class CategorizerAgent(BaseAgent):
             return CatResult(
                 item.key,
                 merchant,
-                "transfers",
-                "keyword",
-                0.72,
-                "UPI payment to an individual (P2P transfer)",
+                "other",
+                "review",
+                0.35,
+                "Payee looks like a person, but a name alone does not establish the payment purpose",
             )
 
         tokens = set(norm.split())
@@ -211,7 +259,12 @@ class CategorizerAgent(BaseAgent):
             scores = {c: s for c, s in scores.items() if c in CREDIT_CATEGORIES or c == "fees"}
             if not scores:
                 return CatResult(
-                    item.key, merchant, "income", "keyword", 0.55, "Unrecognised credit treated as income"
+                    item.key,
+                    merchant,
+                    "other",
+                    "review",
+                    0.35,
+                    "Credit could be income, refund or transfer; needs review",
                 )
         else:
             scores.pop("income", None)
@@ -223,6 +276,18 @@ class CategorizerAgent(BaseAgent):
         return CatResult(item.key, merchant, "other", "fallback", 0.25, "No rule or keyword matched")
 
     # ------------------------------------------------------------------ Jev stage (System One)
+    @staticmethod
+    def _group_key(item: CatItem, result: CatResult) -> tuple[str, bool]:
+        # Amount-dependent labels must not spread from a restaurant meal to a hotel stay.
+        key = result.merchant
+        if payment_provider(item.description):
+            # A platform can process rent, purchases and card bills. Never copy one purpose
+            # across its other payments, even when their payee and direction match.
+            key += "|" + item.description
+        if "HOTEL" in result.merchant.upper():
+            key += "|lodging" if abs(item.amount) >= 2500 else "|meal"
+        return key, item.amount > 0
+
     def _uncertain_groups(
         self, items: list[CatItem], results: dict[int, CatResult], only: set[tuple[str, bool]] | None = None
     ) -> list[tuple[tuple[str, bool], list[CatItem]]]:
@@ -231,7 +296,7 @@ class CategorizerAgent(BaseAgent):
         for it in items:
             r = results[it.key]
             if r.confidence < LLM_THRESHOLD:
-                key = (r.merchant, it.amount > 0)
+                key = self._group_key(it, r)
                 if only is None or key in only:
                     by_merchant[key].append(it)
         return list(by_merchant.items())
@@ -244,7 +309,8 @@ class CategorizerAgent(BaseAgent):
         if not groups:
             return set()
         jobs = []
-        for (merchant, credit), its in groups:
+        for (_, credit), its in groups:
+            merchant = results[its[0].key].merchant
             amounts = sorted(abs(i.amount) for i in its)
             jobs.append(
                 (
@@ -269,10 +335,11 @@ class CategorizerAgent(BaseAgent):
         threshold = self.jev.accept_confidence
         deferred: set[tuple[str, bool]] = set()
         decisions: list[DecisionRecord] = []
-        for ((merchant, credit), its), ev in zip(groups, evals, strict=True):
+        for (group_key, its), ev in zip(groups, evals, strict=True):
+            merchant, credit = results[its[0].key].merchant, group_key[1]
             if not isinstance(ev, Evaluation):
                 stats.jev_errors += 1
-                deferred.add((merchant, credit))
+                deferred.add(group_key)
                 continue
             stats.jev_tokens += ev.input_tokens
             stats.jev_cost_usd += ev.cost_usd
@@ -281,10 +348,10 @@ class CategorizerAgent(BaseAgent):
             family = ev.answers.get("service_family")
             category, conf, why = cat.choice, cat.confidence, None
             ok = conf >= threshold and category != "other"
-            if not ok and payee is not None and payee.choice == "person" and payee.confidence >= threshold:
-                # the category is unclear but the payee is clearly a person → a P2P transfer
-                category, conf, ok = "transfers", payee.confidence, True
-                why = f"Jev: payment to an individual (p={payee.p('person'):.2f})"
+            if category == "transfers" and not re.search(
+                r"SELF TRANSFER|OWN ACCOUNT|FUND TRANSFER|TRANSFER TO|\bP2P\b", its[0].description.upper()
+            ):
+                ok = False
             flipped = "category" in ev.meta.get("order_flipped", [])
             if ok:
                 stats.jev_accepted += 1
@@ -303,7 +370,7 @@ class CategorizerAgent(BaseAgent):
                         )
             else:
                 stats.jev_deferred += 1
-                deferred.add((merchant, credit))
+                deferred.add(group_key)
             self.profiles.append(
                 MerchantDecision(
                     merchant=merchant,
@@ -325,7 +392,9 @@ class CategorizerAgent(BaseAgent):
                     agent=self.name,
                     purpose="merchant_category",
                     subject=f"{merchant} ({'credit' if credit else 'debit'}, {len(its)} txns)",
-                    action="accepted" if ok else "deferred",
+                    action=("accepted_after_llm" if ok else "deferred_after_llm")
+                    if self.llm_available
+                    else ("accepted" if ok else "deferred"),
                 )
             )
             if family is not None and family.choice not in ("none", "utility_bill"):
@@ -350,36 +419,31 @@ class CategorizerAgent(BaseAgent):
         stats: CategorizerStats,
         only: set[tuple[str, bool]] | None = None,
     ) -> None:
-        uncertain = [
-            results[i.key]
-            for i in items
-            if results[i.key].confidence < LLM_THRESHOLD
-            and (only is None or (results[i.key].merchant, i.amount > 0) in only)
-        ]
-        if not uncertain or not self.llm_available:
+        groups = self._uncertain_groups(items, results, only)
+        if not groups or not self.llm_available:
             return
-        # one query per unique merchant (+direction): 300 Swiggy-like rows cost a single line
-        by_merchant: dict[tuple[str, bool], list[CatItem]] = defaultdict(list)
-        item_by_key = {i.key: i for i in items}
-        for r in uncertain:
-            it = item_by_key[r.key]
-            by_merchant[(r.merchant, it.amount > 0)].append(it)
-        groups = list(by_merchant.items())
         stats.llm_merchants = len(groups)
         for start in range(0, len(groups), self.batch_size):
             batch = groups[start : start + self.batch_size]
             payload = {
+                "currency": self.currency,
                 "merchants": [
                     {
                         "id": idx,
-                        "description": its[0].description[:120],
+                        "merchant": results[its[0].key].merchant,
+                        "payment_provider": payment_provider(its[0].description),
+                        "transactions": [
+                            {"description": i.description, "amount": i.amount, "date": i.date}
+                            for i in its[:8]
+                        ],
                         "direction": "credit" if credit else "debit",
                         "typical_amount": round(sorted(abs(i.amount) for i in its)[len(its) // 2], 2),
                         "count": len(its),
                         "rule_guess": results[its[0].key].category,
+                        "rule_reason": results[its[0].key].reason,
                     }
                     for idx, ((_m, credit), its) in enumerate(batch, start=start)
-                ]
+                ],
             }
             data, label, err = self.safe_ask_json(payload, max_tokens=2500)
             stats.llm_batches += 1
@@ -395,13 +459,21 @@ class CategorizerAgent(BaseAgent):
                     conf = float(row.get("confidence", 0.6))
                 except (TypeError, ValueError, AttributeError):
                     continue
-                if cat not in CATEGORY_IDS or not (start <= idx < start + len(batch)):
+                if (
+                    cat not in CATEGORY_IDS
+                    or not (start <= idx < start + len(batch))
+                    or not math.isfinite(conf)
+                    or not 0 <= conf <= 1
+                ):
                     continue
                 (_m, _credit), its = groups[idx]
                 reason = str(row.get("reason") or "LLM classification")[:200]
+                if conf < LLM_THRESHOLD or cat == "other":
+                    reason = f"Uncertain {cat}: {reason}"
+                    cat, conf = "other", min(conf, LLM_THRESHOLD - 0.01)
                 for it in its:
                     prev = results[it.key]
-                    if conf >= prev.confidence or prev.source == "fallback":
+                    if conf >= prev.confidence or prev.confidence < LLM_THRESHOLD:
                         results[it.key] = CatResult(
                             it.key, prev.merchant, cat, "llm", round(min(conf, 0.95), 2), f"LLM: {reason}"
                         )
@@ -426,8 +498,11 @@ class CategorizerAgent(BaseAgent):
                 continue
             if all(m.confidence >= 0.8 for m in members):
                 continue
+            item_by_key = {i.key: i for i in items}
             for k in series.txn_ids:
                 r = results[k]
+                if not re.search(r"SUBSCRIPTION|MEMBERSHIP|MONTHLY PLAN", item_by_key[k].description.upper()):
+                    continue
                 results[k] = CatResult(
                     k,
                     r.merchant,
@@ -447,6 +522,10 @@ class CategorizerAgent(BaseAgent):
         stats = CategorizerStats(total=len(items), model="rules")
         results = {it.key: self.rule_categorize(it) for it in items}
         self.profiles = []
+        # Generative reasoning sees all uncertain narrations, including intermediaries.
+        # Jev handles any remaining uncertainty; an optional cascade can retry those
+        # decisions, but cannot switch off the initial reasoning stage.
+        self._llm_refine(items, results, stats)
         if self.jev_available:
             deferred = self._jev_refine(items, results, stats)
             # Cascading low-confidence answers to an LLM is opt-in: in independent tests the fallback
@@ -454,8 +533,6 @@ class CategorizerAgent(BaseAgent):
             if deferred and self.jev.escalate_to_llm and self.llm_available:
                 stats.jev_escalated = len(deferred)
                 self._llm_refine(items, results, stats, only=deferred)
-        else:
-            self._llm_refine(items, results, stats)
         if use_patterns:
             self.pattern_refine(results, items)
         for r in results.values():

@@ -18,6 +18,7 @@ dist/
 build/
 
 # Local data
+.backups/
 *.db
 *.sqlite
 *.sqlite3

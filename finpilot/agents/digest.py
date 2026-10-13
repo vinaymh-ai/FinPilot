@@ -68,9 +68,13 @@ class DigestAgent(BaseAgent):
             }
             self.system_prompt = SYSTEM_PROMPT.format(currency=currency)
             data, label_, _ = self.safe_ask_json(facts, max_tokens=300, temperature=0.4)
-            if isinstance(data, dict) and data.get("intro") and check_grounding(str(data["intro"]), facts)[0]:
+            if (
+                isinstance(data, dict)
+                and data.get("intro")
+                and check_grounding(str(data["intro"]), facts, strict=True)[0]
+            ):
                 draft_subject = str(data.get("subject") or "")
-                subject_ok = bool(draft_subject) and check_grounding(draft_subject, facts)[0]
+                subject_ok = bool(draft_subject) and check_grounding(draft_subject, facts, strict=True)[0]
                 (verdict,) = check_faithfulness(
                     self.jev,
                     [

@@ -32,12 +32,14 @@ def seed_demo(
     if user.is_demo or not user.password_hash:  # a real account keeps its own name
         user.name = ds.display_name
     user.current_balance = ds.opening_balance
+    user.balance_source = "demo"
     user.balance_as_of = min(t.date for t in ds.transactions) - dt.timedelta(days=1)
     rows = [ParsedRow(t.date, t.time, t.description, t.amount) for t in ds.transactions]
     batch = import_rows(session, user, rows, source="demo", filename=f"demo-{persona}.csv")
     for g in ds.goals:
         session.add(
             Goal(
+                is_demo=True,
                 user_id=user_id,
                 name=g["name"],
                 target_amount=g["target_amount"],

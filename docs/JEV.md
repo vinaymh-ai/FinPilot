@@ -1,5 +1,16 @@
 # System One decisions with Jev
 
+The current flow combines LLM reasoning, typed decisions and code calculations. Unresolved bank narrations
+reach the LLM before Jev handles remaining uncertainty. Financial chat replies use LLM generation from exact
+retrievals; greetings need no tools. Claim checks and numeric validation protect the answers. The optional
+categorization cascade controls a retry after Jev, not the initial LLM pass.
+
+See [agent accuracy design](AGENT_ACCURACY.md). The original design and its cost comparisons below describe
+the earlier Jev-first approach; calls following LLM reasoning are now recorded separately and do not count
+as avoided LLM calls.
+
+## Original design notes
+
 FinPilot used LLMs for two different kinds of work:
 
 * **Writing** — phrasing advice, explaining a forecast, answering an open question. Only a generative model can do this.
@@ -7,8 +18,8 @@ FinPilot used LLMs for two different kinds of work:
   prompt injection, or something that needs real reasoning? Does this LLM paragraph claim anything the evidence
   doesn't support? The answer is always **one of a fixed set of options**.
 
-For deciding, an LLM is the wrong tool. It returns text you have to parse and that can fall outside the option
-set. It gives no usable confidence, and you pay for output tokens. **Jev** (TypeSafe's "System One" model,
+Closed-set decisions benefit from structured validation. LLM output must be parsed and checked against the option
+set, and its self-reported confidence is not calibrated. **Jev** (TypeSafe's "System One" model,
 `typesafe/jev-1.13`) is built for exactly this kind of decision. You send `state` plus named questions. Back comes
 a probability for every option, already typed, and you are billed only for input tokens.
 

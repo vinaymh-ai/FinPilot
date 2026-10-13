@@ -202,24 +202,27 @@ def test_categorizer_uses_jev_per_unique_merchant(fake_jev_factory):
         assert {d.action for d in logged} == {"accepted", "deferred"}
 
 
-def test_categorizer_person_payee_becomes_transfer(fake_jev_factory):
+def test_person_payee_alone_does_not_establish_a_transfer(fake_jev_factory):
     _, client = fake_jev_factory({"payee_type": lambda s, k: "person"})
     results, _ = CategorizerAgent(jev=client).categorize([CatItem(1, "IMPS P2A 33221 KZQX", -2500.0)])
-    assert results[0].category == "transfers" and results[0].source == "jev"
+    assert results[0].category == "other"
 
 
-def test_categorizer_cascade_to_llm_is_opt_in(fake_jev_factory, fake_router_factory):
+def test_categorizer_reasoning_runs_even_when_optional_retry_is_off(fake_jev_factory, fake_router_factory):
     router = fake_router_factory(
         lambda m, o: {"results": [{"id": 0, "category": "shopping", "confidence": 0.9, "reason": "store"}]}
     )
     _, client = fake_jev_factory({})
-    CategorizerAgent(router=router, jev=client).categorize([CatItem(1, "POS ZXQW LTD", -999.0)])
-    assert router.calls == []  # deferred answers keep the rules result by default
+    results, stats = CategorizerAgent(router=router, jev=client).categorize(
+        [CatItem(1, "POS ZXQW LTD", -999.0)]
+    )
+    assert len(router.calls) == 1 and results[0].source == "llm"
+    assert stats.jev_merchants == 0  # no repeated classification of a resolved narration
     _, client = fake_jev_factory({}, categorizer_escalate_to_llm=True)
     results, stats = CategorizerAgent(router=router, jev=client).categorize(
         [CatItem(1, "POS ZXQW LTD", -999.0)]
     )
-    assert len(router.calls) == 1 and results[0].source == "llm" and stats.jev_escalated == 1
+    assert len(router.calls) == 2 and results[0].source == "llm" and stats.jev_escalated == 0
 
 
 def test_pipeline_persists_profiles_and_flags_new_overlaps(seeded, fake_jev_factory):
@@ -238,6 +241,7 @@ def test_pipeline_persists_profiles_and_flags_new_overlaps(seeded, fake_jev_fact
             ParsedRow(end - dt.timedelta(days=30 * m), None, "ACH D- HOICHOI TECHNOLOGIES", -199.0)
             for m in range(5)
         ]
+        rows += [ParsedRow(end - dt.timedelta(days=30 * m), None, "NETFLIX.COM", -199.0) for m in range(5)]
         import_rows(s, user, rows, source="csv")
         s.commit()
     out = Coordinator(jev=client).run_pipeline(trigger="manual", recategorize=True)
@@ -297,15 +301,21 @@ def kit(seeded, db):
     return FinanceToolkit(db, 1)
 
 
-def test_chat_simple_questions_skip_the_llm(kit, fake_jev_factory, fake_router_factory):
-    router = fake_router_factory(lambda m, o: "LLM answer")
-    _, client = fake_jev_factory(chat_pickers())
+def test_chat_simple_questions_use_llm_with_exact_retrieved_facts(kit, fake_jev_factory, fake_router_factory):
+    router = fake_router_factory(lambda m, o: json.loads(m[-1]["content"])["verified_summary"])
+    _, client = fake_jev_factory({**chat_pickers(), "support": lambda s, k: "supported"})
     res = ChatAgent(router=router, jev=client).answer(
         kit, "How much did I spend on food delivery last month?"
     )
-    assert router.calls == []  # answered by the deterministic handler
-    assert res["route"]["intent"] == "spending_lookup" and res["route"]["action"] == "answered_by_rules"
-    assert res["trace"][0]["args"] == {"category": "food_delivery", "merchant": None, "period": "last_month"}
+    assert len(router.calls) == 1
+    assert res["route"]["intent"] == "spending_lookup" and res["route"]["action"] == "escalated_to_llm"
+    assert res["trace"][0]["args"] == {
+        "category": "food_delivery",
+        "merchant": None,
+        "period": "last_month",
+        "start_date": None,
+        "end_date": None,
+    }
     assert "Food Delivery" in res["answer"]
 
 
@@ -327,8 +337,9 @@ def test_chat_escalates_complex_questions_with_model_routing(kit, fake_jev_facto
     _, client = fake_jev_factory(chat_pickers())
     agent = ChatAgent(router=router, jev=client)
     res = agent.answer(kit, "Why is my balance lower than last year?")
-    assert len(router.calls) == 1 and router.calls[0]["model"] != "small-model"  # complex → main model
-    assert res["route"]["action"] == "escalated_to_llm" and res["route"]["complexity"] > 2
+    assert len(router.calls) == 2 and router.calls[0]["model"] != "small-model"  # retry missing retrieval
+    assert res["route"]["action"] == "fallback_rules" and res["route"]["complexity"] > 2
+    assert "Because rent went up" not in res["answer"]  # a tool-free causal guess is not evidence
     agent.answer(kit, "Blorp the zibble?")  # unknown intent → escalated; Jev scores it simple
     assert router.calls[-1]["model"] == "small-model"
 
@@ -380,7 +391,7 @@ def test_guard_rejects_unsupported_llm_phrasing(fake_jev_factory, fake_router_fa
 
 def test_guard_is_transparent_when_jev_is_off():
     verdicts = check_faithfulness(JevClient(Settings(jev_enabled=False)), [("x", {}, "text")], agent="t")
-    assert verdicts[0].ok and not verdicts[0].checked
+    assert not verdicts[0].ok and not verdicts[0].checked
 
 
 # ============================================================================ goals

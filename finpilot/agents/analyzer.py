@@ -24,7 +24,7 @@ from finpilot.agents.base import BaseAgent
 from finpilot.decisions.guard import check_faithfulness
 from finpilot.domain.recurring import RecurringCandidate, TxnLite, monthly_equivalent
 from finpilot.domain.stats import month_key, pct_change, robust_z
-from finpilot.domain.taxonomy import DISCRETIONARY, NON_SPEND, label
+from finpilot.domain.taxonomy import DISCRETIONARY, NON_SPEND, is_spending_flow, label
 from finpilot.llm.grounding import check_grounding
 
 WINDOW = 30
@@ -86,6 +86,7 @@ class AnalysisReport:
     behavior: dict[str, Any]
     profile: list[str] = field(default_factory=list)
     profile_model: str = "rules"
+    data_quality: dict[str, Any] = field(default_factory=dict)
 
     @property
     def monthly_income(self) -> float:
@@ -125,6 +126,7 @@ class AnalyzerAgent(BaseAgent):
         usage_overrides: dict[str, str] | None = None,
         narrate: bool = True,
     ) -> AnalysisReport:
+        txns = [t for t in txns if as_of is None or t.date <= as_of]
         if not txns:
             return AnalysisReport(as_of or dt.date.today(), currency, [], {}, [], [], [], [], {}, {})
         as_of = as_of or max(t.date for t in txns)
@@ -155,6 +157,14 @@ class AnalyzerAgent(BaseAgent):
         report = AnalysisReport(
             as_of, currency, months, windows, trends, findings, anomalies, subs, impulse, behavior
         )
+        coverage = (as_of - min(t.date for t in txns)).days + 1
+        unknown = [t for t in txns if t.category in (None, "other")]
+        report.data_quality = {
+            "history_days": coverage,
+            "uncategorized": len(unknown),
+            "uncategorized_outflow": round(sum(-t.amount for t in unknown if t.amount < 0), 2),
+            "comparison_available": coverage >= 60,
+        }
         if narrate:
             report.profile, report.profile_model = self._profile(report)
         return report
@@ -179,7 +189,7 @@ class AnalyzerAgent(BaseAgent):
                 m["income"] += t.amount
             elif cat == "investments":
                 m["invested"] += -t.amount
-            elif cat not in NON_SPEND:
+            elif is_spending_flow(cat, t.amount):
                 m["spend"] += -t.amount
                 m["by_category"][cat] += -t.amount
         out = []
@@ -214,7 +224,7 @@ class AnalyzerAgent(BaseAgent):
         for t in txns:
             if start < t.date <= end:
                 c = t.category or "other"
-                if c in exclude or (cats and c not in cats):
+                if c in exclude or not is_spending_flow(c, t.amount) or (cats and c not in cats):
                     continue
                 out[c] += -t.amount
         return out
@@ -225,7 +235,7 @@ class AnalyzerAgent(BaseAgent):
             return end - dt.timedelta(days=WINDOW), end
 
         first = min(t.date for t in txns)
-        n_windows = max(1, min(4, (as_of - first).days // WINDOW))
+        n_windows = max(1, min(4, ((as_of - first).days + 1) // WINDOW))
         res: dict[str, Any] = {"window_days": WINDOW, "available_windows": n_windows, "windows": []}
         for i in range(n_windows):
             s, e = window(i)
@@ -287,7 +297,7 @@ class AnalyzerAgent(BaseAgent):
                 "history": [round(h, 2) for h in reversed(hist)],
             }
             trends.append(trend)
-            if c in ("rent", "loans", "insurance", "fees", "cash"):
+            if c in ("rent", "loans", "credit_card_payment", "insurance", "fees", "cash", "other"):
                 continue
             recent = per_window_var[0].get(c, 0.0)
             hist = [w.get(c, 0.0) for w in per_window_var[1:]]
@@ -774,7 +784,7 @@ class AnalyzerAgent(BaseAgent):
         bullets = data.get("profile") if isinstance(data, dict) else None
         if not isinstance(bullets, list) or not bullets:
             return fallback, "rules"
-        good = [str(b) for b in bullets[:4] if check_grounding(str(b), facts)[0]]
+        good = [str(b) for b in bullets[:4] if check_grounding(str(b), facts, strict=True)[0]]
         verdicts = check_faithfulness(
             self.jev,
             [(f"profile bullet {i + 1}", facts, b) for i, b in enumerate(good)],

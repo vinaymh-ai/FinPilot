@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from finpilot.domain.normalize import payment_provider
 from finpilot.domain.recurring import monthly_equivalent
-from finpilot.domain.taxonomy import label
+from finpilot.domain.taxonomy import label, transaction_kind
 from finpilot.models import (
     AgentRun,
     AgentStep,
@@ -31,6 +32,9 @@ def txn(t: Transaction) -> dict[str, Any]:
         "category_source": t.category_source,
         "category_confidence": t.category_confidence,
         "category_reason": t.category_reason,
+        "transaction_kind": transaction_kind(t.category, float(t.amount)),
+        "payment_provider": payment_provider(t.description),
+        "needs_review": t.category in (None, "other") or (t.category_confidence or 0) < 0.7,
         "tags": t.tags or [],
         "is_recurring": t.is_recurring,
         "is_anomaly": t.is_anomaly,

@@ -71,6 +71,17 @@ export default function Overview() {
 
   return (
     <div className="space-y-6">
+      {o.data_quality && (o.data_quality.needs_review > 0 || !o.data_quality.balance_known || o.data_quality.history_days < 90) && (
+        <Card className="border-amber-300 p-4 text-sm">
+          <div className="font-semibold">Check the evidence before relying on forecasts</div>
+          <p className="mt-1 text-muted">
+            Your data covers {o.data_quality.start} to {o.data_quality.end} ({o.data_quality.history_days} days).
+            {o.data_quality.needs_review > 0 && ` ${o.data_quality.needs_review} transactions need category review.`}
+            {!o.data_quality.balance_known && " Set a verified balance in Settings."}
+          </p>
+          <Link to="/transactions" className="mt-2 inline-block font-medium text-brand">Review transactions</Link>
+        </Card>
+      )}
       {/* Proactive headline */}
       <Card className="relative overflow-hidden p-6">
         <div className="absolute -right-24 -top-24 size-72 rounded-full bg-gradient-to-br from-emerald-400/20 to-indigo-500/20 blur-3xl" />

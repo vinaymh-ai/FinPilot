@@ -70,8 +70,14 @@ CATEGORIES: list[Category] = [
     Category(
         "personal_care", "Personal Care", "discretionary", "#f472b6", "sparkles", "Salon, spa, grooming"
     ),
+    Category("loans", "Loans & EMIs", "financial", "#64748b", "landmark", "Loan EMIs and repayments"),
     Category(
-        "loans", "Loans & EMIs", "financial", "#64748b", "landmark", "Loan EMIs, credit-card bill payments"
+        "credit_card_payment",
+        "Credit Card Repayments",
+        "financial",
+        "#475569",
+        "credit-card",
+        "Credit-card bill settlements; distinct from purchases and person-to-person transfers",
     ),
     Category("insurance", "Insurance", "financial", "#8b5cf6", "shield", "Health, life, vehicle insurance"),
     Category(
@@ -121,6 +127,19 @@ NON_SPEND = {"income", "transfers", "investments"}
 
 def label(cat_id: str | None) -> str:
     return BY_ID[cat_id].label if cat_id in BY_ID else "Uncategorised"
+
+
+def transaction_kind(category: str | None, amount: float) -> str:
+    if category in {"transfers", "credit_card_payment", "investments", "cash", "income"}:
+        return {"investments": "investment", "cash": "withdrawal"}.get(category, category)
+    if not category or category == "other":
+        return "unknown"
+    return "refund" if amount > 0 else "expense"
+
+
+def is_spending_flow(category: str | None, amount: float) -> bool:
+    """Only identified refunds offset spending; an unexplained credit is not a negative expense."""
+    return category not in NON_SPEND and (amount < 0 or category not in {None, "other"})
 
 
 def as_dicts() -> list[dict]:

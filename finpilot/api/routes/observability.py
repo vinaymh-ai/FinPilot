@@ -104,9 +104,10 @@ def summary(
     since = dt.datetime.now(dt.UTC) - dt.timedelta(hours=hours)
     base = _scope(select(LLMCall).where(LLMCall.created_at >= since), principal, all_users).subquery()
     kinds: dict[str, Any] = {}
+    kind_expression = func.coalesce(base.c.kind, "llm")
     for kind, n, ok, cached, tin, tout, cost, avg in db.execute(
         select(
-            func.coalesce(base.c.kind, "llm"),
+            kind_expression,
             func.count(),
             func.sum(case((base.c.success.is_(True), 1), else_=0)),
             func.sum(case((base.c.cached.is_(True), 1), else_=0)),
@@ -114,7 +115,7 @@ def summary(
             func.sum(base.c.completion_tokens),
             func.sum(base.c.cost_usd),
             func.avg(base.c.latency_ms),
-        ).group_by(func.coalesce(base.c.kind, "llm"))
+        ).group_by(kind_expression)
     ):
         kinds[kind] = {
             "calls": n,

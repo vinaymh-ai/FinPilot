@@ -11,7 +11,7 @@ LLM-written text reaches the user only if it passes two independent checks:
 A draft is shown only when P(supported) ≥ `JEV_GUARD_CONFIDENCE`; otherwise the deterministic
 template stands. This replaces a second "LLM-as-judge" call: the check costs input tokens only and
 returns a calibrated probability instead of a judge's prose. If Jev is unavailable the guard
-reports `checked=False` and the numeric check alone decides (the pre-Jev behaviour).
+reports `checked=False, ok=False` and the deterministic text is used.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ class GuardVerdict:
         return f"Jev faithfulness check {verdict}: {self.label.replace('_', ' ')} (P(supported)={self.p_supported:.2f})"
 
 
-UNCHECKED = GuardVerdict(checked=False, ok=True, label="unchecked")
+UNCHECKED = GuardVerdict(checked=False, ok=False, label="unchecked")
 
 
 def check_faithfulness(

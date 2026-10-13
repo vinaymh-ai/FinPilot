@@ -37,6 +37,7 @@ from finpilot.agents.forecaster import ForecasterAgent
 from finpilot.config import get_settings
 from finpilot.db import new_session
 from finpilot.decisions.jev import JevClient, get_jev
+from finpilot.domain.normalize import is_card_repayment, looks_like_person, payment_provider
 from finpilot.domain.recurring import detect_recurring
 from finpilot.llm.client import LLMRouter, get_router, run_context, step_call_log
 from finpilot.models import AgentRun, AgentStep, Digest, Forecast, Insight, Recommendation, Transaction
@@ -72,9 +73,10 @@ class PipelineState(TypedDict, total=False):
     digest_id: int
     errors: list[str]
     abort: bool
+    data_signature: str
 
 
-CRITICAL = {"analyze"}
+CRITICAL = {"categorize", "analyze", "forecast"}
 
 
 class Coordinator:
@@ -142,7 +144,8 @@ class Coordinator:
             run = session.get(AgentRun, run.id)
             assert run is not None
             run.finished_at = dt.datetime.now(dt.UTC)
-            run.status = "failed" if final.get("abort") else "succeeded"
+            run.status = "failed" if final.get("errors") else "succeeded"
+            run.input_signature = final.get("data_signature")
             run.error = "; ".join(final.get("errors") or []) or None
             run.summary = self._summary(final)
             session.commit()
@@ -178,11 +181,21 @@ class Coordinator:
         g.add_conditional_edges(
             "plan", self._route_after_plan, {"categorize": "categorize", "analyze": "analyze", "end": END}
         )
-        g.add_edge("categorize", "analyze")
         g.add_conditional_edges(
-            "analyze", lambda s: "end" if s.get("abort") else "forecast", {"forecast": "forecast", "end": END}
+            "categorize",
+            lambda s: "end" if s.get("abort") else "analyze",
+            {"analyze": "analyze", "end": END},
         )
-        g.add_edge("forecast", "advise")
+        g.add_conditional_edges(
+            "analyze",
+            lambda s: "end" if s.get("abort") or "forecast" not in s.get("plan", []) else "forecast",
+            {"forecast": "forecast", "end": END},
+        )
+        g.add_conditional_edges(
+            "forecast",
+            lambda s: "end" if s.get("abort") else "advise",
+            {"advise": "advise", "end": END},
+        )
         g.add_conditional_edges(
             "advise",
             lambda s: "digest" if s.get("deliver_digest") else "end",
@@ -208,6 +221,10 @@ class Coordinator:
             t0 = time.perf_counter()
             with step_call_log() as calls:
                 try:
+                    if node in {"analyze", "forecast", "advise"} and state.get(
+                        "data_signature"
+                    ) != repo.input_signature(session, state["user_id"]):
+                        raise ValueError("Financial inputs changed during analysis. Run the analysis again.")
                     update_, summary, details = fn(session, state)
                     status, error = "succeeded", None
                 except Exception as exc:  # noqa: BLE001
@@ -249,19 +266,37 @@ class Coordinator:
         )
 
     # ------------------------------------------------------------------ nodes
+    @staticmethod
+    def _needs_classification(t: Transaction) -> bool:
+        if t.category_source in {"user", "import"}:
+            return False
+        if t.category is None:
+            return True
+        if is_card_repayment(t.description):
+            return t.category != "credit_card_payment"
+        if payment_provider(t.description):
+            if t.category_source in {"llm", "jev"}:
+                return False
+            return t.category_source == "review" or (
+                t.category != "other" and not (t.category_reason or "").startswith("Explicit purpose:")
+            )
+        return (
+            t.category == "transfers" and looks_like_person(t.description) and t.category_source == "keyword"
+        )
+
     def _plan(self, session: Session, state: PipelineState):
         uid = state["user_id"]
         rows = repo.load_transactions(session, uid)
         n = len(rows)
-        unc = sum(1 for t in rows if t.category is None)
+        unc = sum(self._needs_classification(t) for t in rows)
         if n == 0:
             return {"plan": [], "n_transactions": 0}, "No transactions yet — nothing to analyse", {}
-        plan = (["categorize"] if (unc or state.get("recategorize")) else []) + [
-            "analyze",
-            "forecast",
-            "advise",
-        ]
-        if state.get("deliver_digest"):
+        user = repo.get_or_create_user(session, uid)
+        balance_known = user.balance_source in {"statement", "user", "demo"}
+        plan = (["categorize"] if (unc or state.get("recategorize")) else []) + ["analyze"]
+        if balance_known:
+            plan += ["forecast", "advise"]
+        if state.get("deliver_digest") and balance_known:
             plan.append("digest")
         llm = (
             self.router.describe("advisor")
@@ -270,7 +305,12 @@ class Coordinator:
         )
         jev = self.jev.describe() if self.use_jev else "off"
         return (
-            {"plan": plan, "n_transactions": n, "n_uncategorized": unc},
+            {
+                "plan": plan,
+                "n_transactions": n,
+                "n_uncategorized": unc,
+                "data_signature": repo.input_signature(session, uid),
+            },
             f"{n} transactions ({unc} uncategorised) → plan: {' → '.join(plan)} "
             f"[decisions: {jev}; LLM: {llm}]",
             {"plan": plan, "transactions": n, "uncategorized": unc, "llm": llm, "decisions": jev},
@@ -287,14 +327,14 @@ class Coordinator:
         uid = state["user_id"]
         rows = repo.load_transactions(session, uid)
         if not state.get("recategorize"):
-            targets = [t for t in rows if t.category is None]
+            targets = [t for t in rows if self._needs_classification(t)]
         else:
-            targets = [t for t in rows if t.category_source not in ("user",)]
+            targets = [t for t in rows if t.category_source not in ("user", "import")]
         user = repo.get_or_create_user(session, uid)
         agent = self._agent(
             "categorizer",
             memory=repo.merchant_memory(session, uid),
-            history=repo.merchant_history(session, uid),
+            history={} if state.get("recategorize") else repo.merchant_history(session, uid),
             currency=user.currency,
         )
         items = [CatItem(t.id, t.description, float(t.amount), t.date) for t in targets]
@@ -313,11 +353,16 @@ class Coordinator:
         if j["merchants"]:
             tail = (
                 f"; Jev decided {j['merchants']} unknown merchants ({j['accepted']} accepted, "
-                f"{j['deferred']} deferred to rules, ${j['cost_usd']:.5f})"
+                f"{j['deferred']} still uncertain, ${j['cost_usd']:.5f})"
             )
-        elif st["llm_merchants"]:
-            tail = f"; LLM looked up {st['llm_merchants']} unknown merchants"
-        return ({"categorization": st}, f"Categorised {len(results)} transactions ({src}){tail}", st)
+        if st["llm_merchants"]:
+            tail += f"; LLM reasoned about {st['llm_merchants']} unresolved narration groups"
+        st["needs_review"] = sum(r.category == "other" or r.confidence < 0.7 for r in results)
+        return (
+            {"categorization": st, "data_signature": repo.input_signature(session, uid)},
+            f"Categorised {len(results)} transactions ({src}){tail}",
+            st,
+        )
 
     def _analyze(self, session: Session, state: PipelineState):
         uid = state["user_id"]
