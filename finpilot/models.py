@@ -48,6 +48,7 @@ class User(TimestampMixin, Base):
     # Anchor balance: the account balance as of `balance_as_of`. Forecasts start from here.
     current_balance: Mapped[float] = mapped_column(Money, default=0.0)
     balance_as_of: Mapped[dt.date | None] = mapped_column(Date)
+    balance_source: Mapped[str | None] = mapped_column(String(16))  # statement | user | demo | derived
     safety_buffer: Mapped[float | None] = mapped_column(Money)
     telegram_chat_id: Mapped[str | None] = mapped_column(String(64))
     digest_email: Mapped[str | None] = mapped_column(String(255))
@@ -175,6 +176,7 @@ class RecurringSeries(TimestampMixin, Base):
 
 class Goal(TimestampMixin, Base):
     __tablename__ = "goals"
+    is_demo: Mapped[bool | None] = mapped_column(Boolean, default=False)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
@@ -207,6 +209,7 @@ class AgentRun(Base):
     analysis: Mapped[dict[str, Any] | None] = mapped_column(
         JSON
     )  # analyzer snapshot (trends, subs, behaviour)
+    input_signature: Mapped[str | None] = mapped_column(String(64))
     error: Mapped[str | None] = mapped_column(Text)
 
     steps: Mapped[list[AgentStep]] = relationship(

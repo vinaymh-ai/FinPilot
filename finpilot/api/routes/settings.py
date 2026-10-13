@@ -92,6 +92,7 @@ def update_profile(
         # user states "my balance today is X": anchor it at the latest transaction date
         _, as_of = repo.current_balance(db, user)
         user.current_balance = data.pop("current_balance")
+        user.balance_source = "user"
         user.balance_as_of = data.pop("balance_as_of", None) or as_of
     for k, v in data.items():
         setattr(user, k, v)

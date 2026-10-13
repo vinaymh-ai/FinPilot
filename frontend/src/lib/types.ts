@@ -38,6 +38,9 @@ export interface Txn {
   category_source: string | null;
   category_confidence: number | null;
   category_reason: string | null;
+  transaction_kind: string;
+  payment_provider: string | null;
+  needs_review: boolean;
   tags: string[];
   is_recurring: boolean;
   is_anomaly: boolean;
@@ -201,6 +204,7 @@ export interface Dashboard {
     top_categories_30d: { category: string; amount: number }[];
     subscriptions: { count: number; monthly_cost: number };
     transactions: number;
+    data_quality?: {history_days: number; needs_review: number; balance_known: boolean; start: string | null; end: string | null};
     goals: { name: string; target: number; saved: number; deadline: string }[];
   };
   cashflow: { month: string; income: number; spend: number; invested: number; net: number }[];

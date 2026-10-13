@@ -66,9 +66,10 @@ def list_decisions(
 @router.get("/decisions/stats")
 def decision_stats(uid: int = Depends(current_user_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     by_kind: dict[str, dict[str, Any]] = {}
+    kind_expression = func.coalesce(LLMCall.kind, "llm")
     for kind, n, tin, tout, cost, cached, ok, lat in db.execute(
         select(
-            func.coalesce(LLMCall.kind, "llm"),
+            kind_expression,
             func.count(),
             func.sum(LLMCall.prompt_tokens),
             func.sum(LLMCall.completion_tokens),
@@ -78,7 +79,7 @@ def decision_stats(uid: int = Depends(current_user_id), db: Session = Depends(ge
             func.avg(LLMCall.latency_ms),
         )
         .where(LLMCall.user_id == uid)
-        .group_by(func.coalesce(LLMCall.kind, "llm"))
+        .group_by(kind_expression)
     ):
         by_kind[kind] = {
             "calls": n,

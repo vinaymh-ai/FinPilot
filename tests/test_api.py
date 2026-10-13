@@ -139,6 +139,6 @@ def test_chat_with_llm_tool_calling(client, fake_router_factory):
 
     fake_router_factory(responder)
     out = client.post("/api/chat", json={"message": "food delivery spend last month?"}).json()
-    assert out["model"].startswith("mesh:")
+    assert out["model"] == "rules"  # financial lookups are answered by verified code
     assert out["trace"][0]["tool"] == "get_spending"
-    assert "food delivery" in out["answer"]
+    assert "food delivery" in out["answer"].lower()

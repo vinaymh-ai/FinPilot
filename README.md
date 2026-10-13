@@ -13,9 +13,9 @@ default — and the system still runs end-to-end with **zero LLM spend** (each a
 
 **System One + System Two.** Closed-set *decisions* — which category, which chat intent, is this LLM paragraph
 faithful, is this goal money you'll spend — go to **[Jev](docs/JEV.md)** (TypeSafe's decision model, via Mesh
-`POST /v1/evaluate`): typed answers with calibrated probabilities, billed on input tokens only. LLMs only *write*.
-Simple chat questions are answered straight from your data without an LLM; unsafe or off-topic ones are refused
-without one.
+`POST /v1/evaluate`): typed answers with calibrated probabilities, billed on input tokens only. The LLM reasons
+about uncertain transaction purposes and writes chat answers from verified retrievals. Greetings are conversational;
+financial answers use exact tools and validation. See [agent accuracy design](docs/AGENT_ACCURACY.md).
 
 ![Overview](docs/screenshots/overview.png)
 
@@ -136,10 +136,10 @@ Jev decisions use a separate API. For a direct TypeSafe connection, set `JEV_PRO
 translates Mesh's default alias for direct calls. `JEV_ENABLED=false` uses deterministic decisions instead.
 
 **Zero-cost mode.** Without a key (or with `LLM_ENABLED=false`) every agent completes its job deterministically —
-93% categorisation accuracy, full forecasting, simulation, advice with template text, and a rule-based chat that
+rule-based categorization, forecasting and simulation with a verified balance, template advice, and chat that
 calls the same tools. Adding a Mesh key turns on both systems with the same `rsk_` key: **Jev** decisions
 (long-tail categories, chat routing, the faithfulness guard, goal typing — fractions of a cent per thousand) and the
-**LLM** for narratives, advice phrasing and complex chat. You can also point the LLM side at a free provider (Groq,
+**LLM** for transaction reasoning, narratives and conversational answers. You can also point the LLM side at a free provider (Groq,
 Gemini free tier, OpenRouter `:free`, local Ollama); `JEV_ENABLED=false` turns decisions back to rules.
 
 ---
@@ -165,17 +165,17 @@ graph LR
 | Agent | Its job | Own prompt / tools | Deterministic path | Where the LLM adds value |
 |---|---|---|---|---|
 | **Coordinator** | Plans the run (skip categorisation if nothing is new, add digest on scheduled runs), routes, records the trail | LangGraph conditional edges | always | — |
-| **Categorizer** | Label every transaction with category + confidence + reason | Jev questions: category (structured criteria), payee type, service family | memory → history → ~200-brand lexicon → keyword evidence (amount- & sign-aware, P2P detection) → recurring-pattern post-pass | **Jev decides each long-tail merchant once** (all in parallel; 300 Swiggy rows never leave the lexicon); unsure answers are deferred, LLM cascade opt-in |
+| **Categorizer** | Label every transaction with category + confidence + reason | Full narration, direction, amount, dates and related transactions; category taxonomy | user corrections → trusted history → lexicon → keyword evidence | LLM reasoning for unresolved purposes, including payment platforms; Jev handles remaining uncertainty; provider payments with different descriptions stay separate |
 | **Analyzer** | Behaviour over time; patterns & anomalies | Behaviour-profile prompt | rolling 30-day windows vs previous three (z-scores), median/MAD outliers, duplicate/fee/new-payee detection, recurring-series detection, subscription overlap & **usage evidence**, impulse tagging | 3–4 bullet behaviour profile (grounding-checked) |
 | **Forecaster** | Project the trajectory; simulate decisions | Forecast-narrative prompt | Monte-Carlo engine (below), goal funding, what-if, "wait until"/"cut" suggestions | Plain-language explanation (grounding-checked) |
 | **Advisor** | Turn signals into specific, ranked actions | Advisor prompt (rewrite, never invent numbers) | 11 candidate generators, priority scoring, feedback adaptation, goal-progress adaptation | Friendlier phrasing + weekly headline, rejected if any figure isn't in the evidence |
-| **Chat** | Free-form money questions | Jev router (intent, slots, complexity) + system prompt + **10 function-calling tools** (`simulate`, `get_spending`, `get_forecast`, …) | Per-intent handlers that call the *same* tools | Jev answers simple questions from tools and refuses injection/off-topic **without an LLM**; complex ones go to the LLM tool loop |
+| **Chat** | Free-form money questions | Jev router + financial tools (`simulate`, `get_spending`, `get_forecast`, …) | Exact retrieval and calculations, plus templates on model failure | Conversational greetings; LLM-written answers from exact evidence; complex questions use a tool loop; numeric and claim checks reject unsupported details |
 | **Digest** | Weekly proactive message: one insight + one action | Digest prompt | Template composer | Warm, specific opener (grounding-checked) |
 
 **One run, step by step (demo account):**
 1. `plan` — 609 transactions, 609 uncategorised → plan `categorize → analyze → forecast → advise`.
-2. `categorize` — 502 by lexicon, 89 by keyword evidence, 18 uncertain → one Jev decision per unknown merchant
-   (or the batched LLM when Jev isn't configured).
+2. `categorize` — confirmed rules handle known merchants; unresolved narrations reach batched LLM reasoning,
+   then Jev for remaining uncertainty. Confidence and the classification reason are retained.
 3. `analyze` — 14 recurring series, 8 subscriptions, 4 anomalies, 12 findings → persisted as insights; anomalies
    and impulse tags written back to transactions.
 4. `forecast` — 400 paths × 185 days in ~50 ms; goal snapshots appended (used next run to adapt advice).
@@ -186,15 +186,15 @@ graph LR
 
 ## 4. System One decisions with Jev
 
-LLMs are for *writing*. Most of what FinPilot asked them to do was *deciding* — pick a category, pick an intent,
-judge a paragraph — where the answer is one of a known set. Those decisions now go to **Jev**
+The LLM supplies semantic reasoning and natural-language answers. **Jev** supplies closed-set routing,
+remaining category decisions and checks of whether generated claims are supported
 (`typesafe/jev-1.13`) through Mesh `POST /v1/evaluate`: you send state + named questions, you get a probability for
 every option, already typed. Full design notes, cost analysis and sources: **[docs/JEV.md](docs/JEV.md)**.
 
 | Decision | Before | With Jev |
 |---|---|---|
-| Unknown merchant → category | batched LLM JSON | `category` + `payee_type` + `service_family` in one request per merchant, all in parallel; stored as a merchant profile and never paid for again |
-| Chat message → what to do | LLM tool loop for every message | `intent` (12 options) + slots + `complexity` Score → deterministic tool handler (no LLM), refusal (injection / off-topic / "move my money"), or LLM escalation with a cheaper model for simple ones |
+| Unknown merchant → category | rule fallback | LLM reasons over unresolved narrations; Jev supplies category/payee/service-family decisions where uncertainty remains |
+| Chat message → what to do | fixed templates | Routing selects exact retrieval or a tool loop, followed by an LLM answer with claim checks; greetings need no ledger retrieval |
 | LLM paragraph → show it? | numeric grounding check | numeric check **+** claim-support Choice (supported / unsupported claim / contradiction / generic) |
 | Goal → spent or kept? | all goals treated as savings | `goal_type` Choice + `spend_at_deadline` Noul → trip money leaves the forecast on the deadline |
 | Unknown CSV header → column role | rejected | Jev proposes, **code verifies** the values fit (dates parse, amounts are numbers) |
@@ -204,13 +204,12 @@ every option, already typed. Full design notes, cost analysis and sources: **[do
 deterministic answer; re-ask mid-confidence answers with the options **reversed** (option-order bias) and average;
 log every decision with its probabilities and the action taken (**Decisions** page, `GET /api/decisions`). Math,
 dates and amounts never go to Jev — they arrive as code-computed bands ("small: under ₹500", "in about 5 months").
-The LLM cascade for unsure categories is **off by default**: an independent benchmark found cascades to a fallback
-LLM introduced more errors than they fixed — enable it only if `run_eval --jev` shows a gain.
+Initial LLM reasoning runs whenever the categorizer's LLM is enabled. The optional cascade setting controls an
+additional retry after Jev defers; it does not disable the initial reasoning pass.
 
-**Cost** (input tokens only, $0.042/1M): a chat message Jev routes to a tool handler costs ~1/13 of the LLM tool
-loop it replaces. Categorization is roughly cost-neutral versus a *batched* cheap LLM — the win there is calibrated
-confidence, always-valid labels and latency. The faithfulness guard, goal typing and CSV mapping are new checks and
-are reported as added cost, never as savings (`GET /api/decisions/stats`).
+**Cost:** model usage is recorded per run and step. Exact retrieval avoids repeated tool-selection calls for
+straightforward questions, while answer generation and validation still use models. Faithfulness checks,
+goal typing and CSV mapping are reported as added cost (`GET /api/decisions/stats`).
 
 | Decisions (Jev) page | Chat routed by Jev |
 |---|---|
@@ -524,3 +523,38 @@ jq 'select(.request_id == "3f9c0e…")' logs/finpilot.log   # everything one req
 * Mesh's `/v1/evaluate` is a **beta** endpoint whose contract may change; the client pins `X-Mesh-Version` and
   validates requests locally, and every Jev decision has a deterministic fallback. Jev accuracy/calibration figures
   are pending a live `run_eval --jev` (the development sandbox could not reach the API).
+
+## 15. Accuracy and evidence
+
+Transactions expose two levels: `transaction_kind` (expense, refund, transfer, credit-card repayment,
+investment, withdrawal, income or unknown) and the spending category. `payment_provider` separately
+identifies intermediaries such as CRED, Kiwi or Razorpay. An app name or a person's name alone does not
+establish what a payment was for. Explicit card bills use **Credit Card Repayments**; ambiguous descriptors
+stay **Other / Needs review**. Use the Transactions review filter to confirm them. Corrections to a payment
+provider apply to that individual transaction, since the next payment through the app can have a different
+purpose. A normal analysis run also repairs legacy automatic gateway labels; manual and imported labels stay.
+
+Merchant totals and transaction searches take the name and date filters from the question and execute over
+the signed-in user's records. Named-merchant questions without dates use all available statement history;
+answers show the covered dates, counts and matching IDs. Whole-name matching avoids treating `Ram` as
+`Ramesh`. Missing matches produce a clear no-match answer rather than another category's total. Tool traces
+retain the actual results, including search truncation and refunds.
+
+LLM financial text requires successful retrieval, numeric grounding and a supported faithfulness verdict.
+Unverified drafts are discarded and deterministic handlers answer instead; a warning never makes an
+unsupported answer acceptable. This applies to chat and agent narratives. With Jev unavailable, financial
+narratives use deterministic templates.
+
+Once real statements are present, demo transactions, linked subscriptions and marked starter goals are
+excluded from the real-data view and agents, while remaining stored. A real statement replaces the demo
+balance anchor; without a supplied balance, affordability checks request a verified balance in Settings.
+Editing a marked starter goal explicitly adopts it as your own goal. Old databases may contain goals or
+balances with no provenance, which cannot safely be identified as sample data automatically.
+
+The planner stops on failed classification, analysis or forecasting, and invalidates old outputs when the
+inputs change. Analysis reports uncovered categories and available history; short histories are marked as
+limited evidence. Forecasts remain estimates of future behavior, never guaranteed balances. Repayments are
+reported as financial outflows; this does not automatically reconcile duplicate bank and card exports.
+
+Backend tests default to an isolated SQLite database. To exercise PostgreSQL, point
+`FINPILOT_TEST_DATABASE_URL` at a **dedicated empty test database**; the suite drops and recreates its tables.

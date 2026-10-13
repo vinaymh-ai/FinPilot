@@ -101,7 +101,7 @@ def test_indian_payment_rails_from_a_real_statement():
             60000,
             "transfers",
         ),  # not MakeMyTrip
-        ("UPI/RAMESH/9000000001@ybl/Payment fr/KARNATAKA/900000000001/YBL29f", -6000, "transfers"),
+        ("UPI/RAMESH/9000000001@ybl/Payment fr/KARNATAKA/900000000001/YBL29f", -6000, "other"),
         ("UPI/ICCL Mutua/mfautopay.elem/Indian Cle/HDFC BANK/100000000001/HDF58A6", -2000, "investments"),
         ("UPI/Indian Rai/bdpg2.ir@sbi/Payment fr/State Bank/400000000001/AXLb747", -522.7, "travel"),
         ("MAKEMYTRIP INDIA PVT LTD", -8000, "travel"),

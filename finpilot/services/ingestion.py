@@ -117,6 +117,8 @@ def import_rows(
     errors: list[str] | None = None,
     total: int | None = None,
 ) -> ImportBatch:
+    if source != "demo" and rows and user.balance_source == "demo":
+        user.current_balance, user.balance_as_of, user.balance_source = 0.0, None, "derived"
     batch = ImportBatch(
         user_id=user.id,
         source=source,
@@ -175,7 +177,9 @@ def _update_balance_anchor(user: User, rows: list[ParsedRow]) -> None:
         anchor = candidates[-1]
         if user.balance_as_of is None or anchor.date >= user.balance_as_of:
             user.current_balance, user.balance_as_of = float(anchor.balance or 0.0), anchor.date
+            user.balance_source = "statement"
     elif user.balance_as_of is None and rows:
         # no balance information: start from zero the day before the first transaction
         user.current_balance = user.current_balance or 0.0
         user.balance_as_of = min(r.date for r in rows) - dt.timedelta(days=1)
+        user.balance_source = "derived"

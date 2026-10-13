@@ -659,8 +659,8 @@ class AdvisorAgent(BaseAgent):
                 c.reasoning.append("Phrasing: template (LLM returned nothing for this item)")
                 continue
             facts = (c.evidence, c.title, c.message, c.monthly_impact, c.one_time_impact)
-            ok_t, bad_t = check_grounding(str(row["title"]), *facts)
-            ok_m, bad_m = check_grounding(str(row["message"]), *facts)
+            ok_t, bad_t = check_grounding(str(row["title"]), *facts, strict=True)
+            ok_m, bad_m = check_grounding(str(row["message"]), *facts, strict=True)
             if ok_t and ok_m:
                 passed.append((c, str(row["title"])[:120], str(row["message"])[:600]))
             else:
@@ -669,7 +669,7 @@ class AdvisorAgent(BaseAgent):
                 )
         headline = str(data.get("headline") or fallback_headline)
         all_facts = [c.to_dict() for c in top]
-        headline_ok = check_grounding(headline, all_facts)[0]
+        headline_ok = check_grounding(headline, all_facts, strict=True)[0]
         # Second layer: does the draft claim anything the evidence doesn't support? (one Jev fan-out)
         guard_items = [
             (

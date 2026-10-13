@@ -136,7 +136,7 @@ def _projections(db: Session, uid: int) -> dict[int, dict[str, Any]]:
 @router.get("/goals")
 def list_goals(uid: int = Depends(current_user_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     proj = _projections(db, uid)
-    goals = db.scalars(select(Goal).where(Goal.user_id == uid).order_by(Goal.priority, Goal.deadline))
+    goals = db.scalars(select(Goal).where(repo.goal_scope(db, uid)).order_by(Goal.priority, Goal.deadline))
     return {"goals": [ser.goal(g, proj.get(g.id)) for g in goals]}
 
 
@@ -178,6 +178,7 @@ def update_goal(
     changes = dump(body)
     user_type, user_spend = changes.pop("goal_type", None), changes.pop("spend_at_deadline", None)
     renamed = "name" in changes and changes["name"] != g.name
+    g.is_demo = False  # editing a starter goal explicitly adopts it as the user's goal
     for k, v in changes.items():
         setattr(g, k, v)
     if user_type is not None or user_spend is not None or renamed:

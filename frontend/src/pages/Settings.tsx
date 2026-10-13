@@ -123,7 +123,7 @@ function JevCard({ jev }: { jev: JevState }) {
             <div className="flex items-center gap-2">
               <Toggle checked={jev.escalate_to_llm} onChange={(v) => save.mutate({ escalate_to_llm: v })} label="Escalate to LLM" />
               <span>
-                Cascade unsure categories to the LLM <span className="text-muted">(validate with run_eval first)</span>
+                Retry unresolved decisions with the LLM <span className="text-muted">(initial LLM reasoning always runs when enabled)</span>
               </span>
             </div>
           </div>

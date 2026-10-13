@@ -76,11 +76,15 @@ CATEGORY_GUIDE: dict[str, dict[str, Any]] = {
     },
     "personal_care": {"what": "Salons, spas, grooming, beauty services"},
     "loans": {"what": "Loan EMIs and repayments to banks or lenders"},
+    "credit_card_payment": {
+        "what": "Credit-card bill repayment or settlement, inferred from narration and payee's service",
+        "not_for": "identified purchases, rent or other purposes processed by the same platform",
+    },
     "insurance": {"what": "Insurance premiums: health, life, vehicle, term"},
     "investments": {"what": "SIPs, mutual funds, stocks, FDs, RDs, PPF, NPS"},
     "transfers": {
-        "what": "Money to or from a person, to your own account, or a credit-card bill payment",
-        "not_for": "paying a business via UPI (that business's category)",
+        "what": "An explicitly identified person-to-person or own-account transfer",
+        "not_for": "credit-card repayment; a name or payment app alone does not prove a transfer",
     },
     "cash": {"what": "ATM cash withdrawals"},
     "fees": {"what": "Bank charges, late fees, penalties, card annual fees"},
@@ -151,7 +155,9 @@ def merchant_questions(*, credit: bool, typical_amount: float = 0.0) -> dict[str
         "category": Choice(
             "Which spending category does this bank-statement transaction belong to? Judge from the "
             "merchant text, the direction and the amount band; a credit at a shop is a refund in that "
-            "shop's category.",
+            "shop's category. Payment providers are intermediaries, not purchase categories. "
+            "A personal name or monthly cadence alone does not prove a transfer or subscription. "
+            "Choose other if the purpose is not evidenced.",
             {c: CATEGORY_GUIDE[c] for c in cats},
         ),
         "payee_type": Choice(
@@ -209,7 +215,7 @@ INTENTS: dict[str, dict[str, Any]] = {
         "examples": ["Anything weird in my spending?", "Was I double charged?"],
     },
     "overview": {
-        "what": "A general summary of their finances, today's balance, a greeting, or what FinPilot can do",
+        "what": "A requested general summary of their finances or today's balance",
         "examples": ["How am I doing?", "Hi", "Give me a summary"],
     },
     "complex_reasoning": {
@@ -292,7 +298,7 @@ def chat_questions() -> dict[str, Question]:
 FAITHFULNESS: dict[str, dict[str, Any]] = {
     "supported": {
         "what": "Every claim in the draft is stated in, or follows directly from, the facts",
-        "not_for": "drafts that add a cause, merchant, date or amount the facts do not contain",
+        "not_for": "invented claims or answers about a different merchant/category/period than user_question, when supplied",
     },
     "unsupported_claim": {
         "what": "The draft states a fact, cause, merchant, date or amount that the facts do not contain",

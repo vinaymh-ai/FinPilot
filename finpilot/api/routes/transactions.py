@@ -35,13 +35,23 @@ def list_transactions(
     anomalies: bool = False,
     recurring: bool = False,
     impulse: bool = False,
+    review: bool = False,
     direction: str | None = Query(default=None, pattern="^(in|out)$"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=500),
     uid: int = Depends(current_user_id),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    stmt = select(Transaction).where(Transaction.user_id == uid)
+    scope = repo.transaction_scope(db, uid)
+    stmt = select(Transaction).where(scope)
+    if review:
+        stmt = stmt.where(
+            or_(
+                Transaction.category.is_(None),
+                Transaction.category == "other",
+                Transaction.category_confidence < 0.7,
+            )
+        )
     if q:
         like = f"%{q}%"
         stmt = stmt.where(or_(Transaction.description.ilike(like), Transaction.merchant.ilike(like)))
@@ -71,7 +81,7 @@ def list_transactions(
     sources = dict(
         db.execute(
             select(Transaction.category_source, func.count())
-            .where(Transaction.user_id == uid)
+            .where(scope)
             .group_by(Transaction.category_source)
         ).all()
     )

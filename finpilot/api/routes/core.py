@@ -18,7 +18,7 @@ from finpilot.api.deps import current_user_id, get_db
 from finpilot.config import ROOT_DIR, get_settings
 from finpilot.decisions.jev import get_jev
 from finpilot.domain.stats import month_key
-from finpilot.domain.taxonomy import NON_SPEND, as_dicts, label
+from finpilot.domain.taxonomy import as_dicts, is_spending_flow, label
 from finpilot.llm.client import AGENTS, get_router
 from finpilot.models import Digest, Goal
 from finpilot.services import repository as repo
@@ -145,7 +145,7 @@ def dashboard(uid: int = Depends(current_user_id), db: Session = Depends(get_db)
             m["income"] += t.amount
         elif t.category == "investments":
             m["invested"] += -t.amount
-        elif t.category not in NON_SPEND:
+        elif is_spending_flow(t.category, t.amount):
             m["spend"] += -t.amount
             if t.date >= start30:
                 cats_30[t.category] += -t.amount
@@ -175,7 +175,8 @@ def dashboard(uid: int = Depends(current_user_id), db: Session = Depends(get_db)
         "analysis_running": _analysis_running(db, uid),
         "latest_digest": ser.digest(latest_digest) if latest_digest else None,
         "goals": [
-            ser.goal(g) for g in db.scalars(select(Goal).where(Goal.user_id == uid, Goal.status == "active"))
+            ser.goal(g)
+            for g in db.scalars(select(Goal).where(repo.goal_scope(db, uid), Goal.status == "active"))
         ],
     }
 

@@ -3,20 +3,24 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import json
 from collections import defaultdict
 from typing import Any
 
-from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.orm import Session
 
 from finpilot.agents.forecaster import GoalInput
 from finpilot.config import get_settings
+from finpilot.domain.normalize import payment_provider
 from finpilot.domain.recurring import RecurringCandidate, TxnLite
 from finpilot.models import (
     AgentRun,
     AppSetting,
     Forecast,
     Goal,
+    ImportBatch,
     Insight,
     MerchantMemory,
     MerchantProfile,
@@ -48,11 +52,19 @@ def get_or_create_user(session: Session, user_id: int = DEFAULT_USER_ID) -> User
     return user
 
 
+def transaction_scope(session: Session, user_id: int):
+    """Use real transactions once present; sample records remain stored but cannot contaminate totals."""
+    demo_ids = select(ImportBatch.id).where(ImportBatch.user_id == user_id, ImportBatch.source == "demo")
+    real = or_(Transaction.batch_id.is_(None), Transaction.batch_id.not_in(demo_ids))
+    has_real = session.scalar(select(Transaction.id).where(Transaction.user_id == user_id, real).limit(1))
+    return (Transaction.user_id == user_id) & real if has_real else Transaction.user_id == user_id
+
+
 def load_transactions(session: Session, user_id: int) -> list[Transaction]:
     return list(
         session.scalars(
             select(Transaction)
-            .where(Transaction.user_id == user_id)
+            .where(transaction_scope(session, user_id))
             .order_by(Transaction.date, Transaction.time, Transaction.id)
         )
     )
@@ -72,13 +84,14 @@ def to_lite(t: Transaction) -> TxnLite:
 
 def current_balance(session: Session, user: User) -> tuple[float, dt.date]:
     """Balance as of the latest transaction: anchor balance + flows recorded after the anchor date."""
-    last = session.scalar(select(func.max(Transaction.date)).where(Transaction.user_id == user.id))
+    scope = transaction_scope(session, user.id)
+    last = session.scalar(select(func.max(Transaction.date)).where(scope))
     as_of = last or dt.date.today()
     bal = float(user.current_balance or 0.0)
     if user.balance_as_of is not None:
         after = session.scalar(
             select(func.coalesce(func.sum(Transaction.amount), 0.0)).where(
-                Transaction.user_id == user.id, Transaction.date > user.balance_as_of
+                scope, Transaction.date > user.balance_as_of
             )
         )
         bal += float(after or 0.0)
@@ -90,7 +103,7 @@ def recurring_candidates(session: Session, user_id: int) -> list[RecurringCandid
     ids: dict[int, list[int]] = defaultdict(list)
     for tid, rid in session.execute(
         select(Transaction.id, Transaction.recurring_id).where(
-            Transaction.user_id == user_id, Transaction.recurring_id.is_not(None)
+            transaction_scope(session, user_id), Transaction.recurring_id.is_not(None)
         )
     ):
         ids[rid].append(tid)
@@ -99,6 +112,8 @@ def recurring_candidates(session: Session, user_id: int) -> list[RecurringCandid
     families = merchant_families(session, user_id)
     out = []
     for r in rows:
+        if r.id not in ids:
+            continue
         rule = rule_by_name(r.merchant)
         out.append(
             RecurringCandidate(
@@ -195,8 +210,21 @@ def goal_inputs(session: Session, user_id: int) -> list[GoalInput]:
             g.priority,
             spend_at_deadline=bool(g.spend_at_deadline),
         )
-        for g in session.scalars(select(Goal).where(Goal.user_id == user_id, Goal.status == "active"))
+        for g in session.scalars(select(Goal).where(goal_scope(session, user_id), Goal.status == "active"))
     ]
+
+
+def goal_scope(session: Session, user_id: int):
+    demo = select(ImportBatch.id).where(ImportBatch.user_id == user_id, ImportBatch.source == "demo")
+    has_real = session.scalar(
+        select(Transaction.id)
+        .where(
+            Transaction.user_id == user_id,
+            or_(Transaction.batch_id.is_(None), Transaction.batch_id.not_in(demo)),
+        )
+        .limit(1)
+    )
+    return ((Goal.user_id == user_id) & Goal.is_demo.is_not(True)) if has_real else Goal.user_id == user_id
 
 
 def goal_history(session: Session, user_id: int) -> dict[str, list[dict[str, Any]]]:
@@ -238,15 +266,16 @@ def merchant_memory(session: Session, user_id: int) -> dict[str, str]:
 
 def merchant_history(session: Session, user_id: int) -> dict[str, str]:
     """Merchants previously categorised by a model or the user — consistency, and never paying twice."""
-    out: dict[str, str] = {}
-    for merchant, category in session.execute(
-        select(Transaction.merchant, Transaction.category).where(
-            Transaction.user_id == user_id, Transaction.category_source.in_(("llm", "jev", "user"))
-        )
-    ):
-        if category:
-            out[merchant.upper()] = category
-    return out
+    groups: dict[str, set[str]] = defaultdict(set)
+    for t in load_transactions(session, user_id):
+        if (
+            t.category
+            and t.category_source in ("llm", "jev", "user")
+            and (t.category_confidence or 0) >= 0.85
+            and not payment_provider(t.description)
+        ):
+            groups[t.merchant.upper()].add(t.category)
+    return {merchant: next(iter(cats)) for merchant, cats in groups.items() if len(cats) == 1}
 
 
 NON_OVERLAP_FAMILIES = {"none", "utility_bill"}
@@ -274,6 +303,8 @@ def save_merchant_profiles(session: Session, user_id: int, profiles: list[Any]) 
         for p in session.scalars(select(MerchantProfile).where(MerchantProfile.user_id == user_id))
     }
     for d in profiles:
+        if not d.accepted:
+            continue
         key = d.merchant.upper()
         row = existing.get(key)
         fields = dict(
@@ -297,6 +328,10 @@ def save_merchant_profiles(session: Session, user_id: int, profiles: list[Any]) 
 def remember_correction(session: Session, user_id: int, merchant: str, category: str) -> int:
     """Store a user correction and apply it to all transactions from the same merchant."""
     key = merchant.upper()
+    if payment_provider(merchant):
+        raise ValueError(
+            "A payment provider can cover different purposes. Apply this correction to one transaction."
+        )
     row = session.scalar(
         select(MerchantMemory).where(MerchantMemory.user_id == user_id, MerchantMemory.merchant_key == key)
     )
@@ -317,19 +352,64 @@ def remember_correction(session: Session, user_id: int, merchant: str, category:
     return res.rowcount or 0
 
 
+def input_signature(session: Session, user_id: int) -> str:
+    session.flush()
+    session.expire_all()  # detect edits committed by another request, not just cached ORM attributes
+    user = session.get(User, user_id)
+    data = {
+        "transactions": [
+            (t.id, t.fingerprint, t.category, t.merchant, t.category_confidence)
+            for t in load_transactions(session, user_id)
+        ],
+        "balance": (user.current_balance, user.balance_as_of, user.safety_buffer, user.balance_source)
+        if user
+        else None,
+        "goals": [
+            (
+                g.id,
+                g.name,
+                g.target_amount,
+                g.saved_amount,
+                g.deadline,
+                g.priority,
+                g.status == "archived",
+                g.is_demo,
+                g.spend_at_deadline if g.type_source == "user" else None,
+            )
+            for g in session.scalars(select(Goal).where(goal_scope(session, user_id)).order_by(Goal.id))
+        ],
+        "recurring_overrides": [
+            (r.merchant, r.status == "cancelled", r.usage)
+            for r in session.scalars(
+                select(RecurringSeries)
+                .where(
+                    RecurringSeries.user_id == user_id,
+                    or_(RecurringSeries.status == "cancelled", RecurringSeries.usage != "unknown"),
+                )
+                .order_by(RecurringSeries.id)
+            )
+        ],
+    }
+    return hashlib.sha256(json.dumps(data, default=str, sort_keys=True).encode()).hexdigest()
+
+
 def latest_run(session: Session, user_id: int, graph: str = "pipeline") -> AgentRun | None:
-    return session.scalar(
+    run = session.scalar(
         select(AgentRun)
         .where(AgentRun.user_id == user_id, AgentRun.graph == graph, AgentRun.status == "succeeded")
         .order_by(AgentRun.id.desc())
         .limit(1)
     )
+    return run if run and run.input_signature == input_signature(session, user_id) else None
 
 
 def latest_forecast(session: Session, user_id: int) -> Forecast | None:
+    run = latest_run(session, user_id)
+    if run is None:
+        return None
     return session.scalar(
         select(Forecast)
-        .where(Forecast.user_id == user_id, Forecast.run_id.is_not(None))
+        .where(Forecast.user_id == user_id, Forecast.run_id == run.id)
         .order_by(Forecast.id.desc())
         .limit(1)
     )

@@ -23,9 +23,9 @@ const SUGGESTIONS = [
 
 const ROUTE_ACTION: Record<string, { text: string; tone: "green" | "violet" | "red" | "neutral" }> = {
   answered_by_rules: { text: "answered from tools — no LLM", tone: "green" },
-  escalated_to_llm: { text: "escalated to the LLM", tone: "violet" },
+  escalated_to_llm: { text: "LLM answer · verified facts", tone: "violet" },
   refused: { text: "refused — no LLM", tone: "red" },
-  fallback_rules: { text: "fallback router", tone: "neutral" },
+  fallback_rules: { text: "verified fallback", tone: "neutral" },
 };
 
 function RouteView({ route }: { route: ChatRoute }) {
@@ -221,8 +221,7 @@ export default function Chat() {
         </form>
       </Card>
       <div className="mt-2 text-center text-[11.5px] text-muted">
-        <Badge tone="cyan">Jev routing</Badge> Simple questions are answered straight from your data; only complex ones reach an LLM. Every figure
-        comes from a tool call you can inspect.
+        Replies use AI reasoning with your recorded financial data. Expand the tool results to see the evidence behind financial answers.
       </div>
     </div>
   );

@@ -135,6 +135,8 @@ def ensure_goal_types(
     """Classify every goal that has no type yet (new goals, goals from older versions)."""
     n = 0
     for g in session.scalars(select(Goal).where(Goal.user_id == user_id, Goal.goal_type.is_(None))):
+        if g.type_source == "user":
+            continue  # an explicit spending override remains authoritative even without a type label
         typing = classify_goal(
             g.name, float(g.target_amount), g.deadline, as_of, currency, jev=jev, use_jev=use_jev
         )

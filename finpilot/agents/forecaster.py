@@ -107,6 +107,13 @@ class ForecastEngine:
         seed: int = 42,
         safety_buffer: float | None = None,
     ):
+        if not math.isfinite(balance) or not isinstance(n_paths, int) or n_paths < 1:
+            raise ValueError("Forecast requires a finite balance and at least one simulation path")
+        if safety_buffer is not None and (not math.isfinite(safety_buffer) or safety_buffer < 0):
+            raise ValueError("Safety buffer must be finite and nonnegative")
+        if any(not math.isfinite(t.amount) for t in txns):
+            raise ValueError("Transaction amounts must be finite")
+        txns = [t for t in txns if t.date <= as_of]
         self.as_of = as_of
         self.balance = float(balance)
         self.goals = sorted(goals or [], key=lambda g: (g.priority, g.deadline))
@@ -121,7 +128,7 @@ class ForecastEngine:
         recurring_ids = {i for r in recurring for i in r.txn_ids}
         excluded = recurring_ids | (exclude_ids or set())
         first = min((t.date for t in txns), default=as_of)
-        self.L = int(max(14, min(LOOKBACK_DAYS, (as_of - first).days + 1)))
+        self.L = int(max(1, min(LOOKBACK_DAYS, (as_of - first).days + 1)))
         lb_dates = [as_of - dt.timedelta(days=self.L - 1 - i) for i in range(self.L)]
         idx_of = {d: i for i, d in enumerate(lb_dates)}
         cats: dict[str, int] = {}
@@ -179,7 +186,7 @@ class ForecastEngine:
         pool = np.asarray(self.shock_pool)
         for p, n in enumerate(counts):
             if n:
-                shocks[p, rng.integers(0, self.H, size=n)] += rng.choice(pool, size=n)
+                np.add.at(shocks[p], rng.integers(0, self.H, size=n), rng.choice(pool, size=n))
         return shocks
 
     def _weekday_mean(self, flows: np.ndarray) -> np.ndarray:
@@ -314,6 +321,7 @@ class ForecastEngine:
             "as_of": self.as_of.isoformat(),
             "start_balance": round(self.balance, 2),
             "horizon_days": self.H,
+            "data_quality": {"lookback_days": self.L, "limited_history": self.L < LOOKBACK_DAYS},
             "safety_buffer": round(self.safety_buffer, 2),
             "low_point": {
                 "date": self.dates[low_i].isoformat(),
@@ -816,7 +824,7 @@ class ForecasterAgent(BaseAgent):
         self.system_prompt = SYSTEM_PROMPT.format(currency=currency)
         data, label_, _ = self.safe_ask_json(facts, max_tokens=400, temperature=0.2)
         text = data.get("narrative") if isinstance(data, dict) else None
-        if not text or not check_grounding(str(text), facts)[0]:
+        if not text or not check_grounding(str(text), facts, strict=True)[0]:
             return fallback, "rules"
         (verdict,) = check_faithfulness(
             self.jev, [("forecast narrative", facts, str(text))], agent=self.name, enabled=self.use_jev

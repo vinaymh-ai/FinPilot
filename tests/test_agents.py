@@ -55,7 +55,7 @@ def test_categorizer_rules_and_reasons():
     cases = {
         "UPI/DR/1/SWIGGY/YESB/swiggy@ybl/Payment": ("food_delivery", "rule"),
         "POS 1234XXXXXX5678 SHRI GANESH MEDICALS": ("health", "keyword"),
-        "UPI/1/PRIYA NAIR/priya@oksbi": ("transfers", "keyword"),
+        "UPI/1/PRIYA NAIR/priya@oksbi": ("other", "review"),
         "NEFT CR-HDFC0001234-ACME TECH PVT LTD SALARY": ("income", "rule"),
     }
     for desc, (cat, src) in cases.items():
@@ -218,7 +218,7 @@ def test_advisor_rejects_hallucinated_numbers(pipeline_objects, fake_router_fact
     first = out["recommendations"][0]
     assert "99,999" not in first["message"]  # invented figure rejected → template kept
     assert any("rejected" in step for step in first["reasoning"])
-    assert any(r["generated_by"].startswith("mesh:") for r in out["recommendations"][1:])
+    assert all(r["generated_by"] == "rules" for r in out["recommendations"])  # unverified drafts stay hidden
 
 
 def test_advisor_snoozes_dismissed_advice(pipeline_objects):

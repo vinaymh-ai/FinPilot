@@ -7,18 +7,22 @@ fallback) and by the REST API, so every number a user sees comes from the same c
 from __future__ import annotations
 
 import datetime as dt
+import math
 import re
 from collections import Counter, defaultdict
+from decimal import Decimal
 from functools import cached_property
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
 from finpilot.agents.forecaster import Adjustment, ForecastEngine, ForecasterAgent
 from finpilot.config import get_settings
+from finpilot.domain.normalize import merchant_matches, normalize_text
 from finpilot.domain.recurring import monthly_equivalent
 from finpilot.domain.stats import add_months, month_key
-from finpilot.domain.taxonomy import BY_ID, CATEGORIES, NON_SPEND, label
+from finpilot.domain.taxonomy import BY_ID, CATEGORIES, NON_SPEND, is_spending_flow, label
 from finpilot.services import repository as repo
 
 SYNONYMS = {
@@ -52,6 +56,8 @@ SYNONYMS = {
     "education": ["education"],
     "emi": ["loans"],
     "loans": ["loans"],
+    "credit card": ["credit_card_payment"],
+    "card repayment": ["credit_card_payment"],
     "insurance": ["insurance"],
     "investments": ["investments"],
     "sip": ["investments"],
@@ -79,7 +85,7 @@ def resolve_categories(text: str | None) -> list[str]:
         if t == c.label.lower() or t.replace(" ", "_") == c.id:
             return [c.id]
     for key, cats in SYNONYMS.items():
-        if key in t:
+        if re.search(rf"\b{re.escape(key)}\b", t):
             return cats
     return []
 
@@ -116,7 +122,15 @@ class FinanceToolkit:
     def as_of(self) -> dt.date:
         return self.balance_info[1]
 
+    @property
+    def today(self) -> dt.date:
+        return dt.datetime.now(ZoneInfo(get_settings().timezone)).date()
+
     def engine(self, seed: int = 42) -> ForecastEngine:
+        if not self.data_quality()["balance_known"]:
+            raise ValueError(
+                "Set a verified account balance in Settings or upload a statement with balances before forecasting."
+            )
         s = get_settings()
         return ForecasterAgent(use_llm=False, n_paths=s.monte_carlo_paths).engine(
             self.txns,
@@ -132,51 +146,100 @@ class FinanceToolkit:
 
     def money(self, x: float) -> str:
         sym = {"INR": "₹", "USD": "$", "EUR": "€", "GBP": "£"}.get(self.currency, "")
-        return f"{'-' if x < 0 else ''}{sym}{abs(x):,.0f}"
+        digits = 2 if round(abs(x), 2) != round(abs(x)) else 0
+        return f"{'-' if x < 0 else ''}{sym}{abs(x):,.{digits}f}"
+
+    def data_quality(self) -> dict[str, Any]:
+        dates = [t.date for t in self.rows]
+        review = [
+            t.id
+            for t in self.rows
+            if t.category in (None, "other")
+            or (t.category_confidence is not None and t.category_confidence < 0.7)
+        ]
+        days = (max(dates) - min(dates)).days + 1 if dates else 0
+        return {
+            "transactions": len(dates),
+            "balance_known": self.user.balance_source in {"statement", "user", "demo"},
+            "start": min(dates).isoformat() if dates else None,
+            "end": max(dates).isoformat() if dates else None,
+            "history_days": days,
+            "needs_review": len(review),
+            "review_transaction_ids": review[:100],
+            "forecast_reliability": "limited" if days < 90 or review else "historical_estimate",
+        }
 
     # ------------------------------------------------------------------ period helpers
     def period_range(
         self, period: str | None = None, start_date: str | None = None, end_date: str | None = None
     ) -> tuple[dt.date, dt.date, str]:
-        a = self.as_of
+        a = self.today
         if start_date or end_date:
             s = dt.date.fromisoformat(start_date) if start_date else a - dt.timedelta(days=30)
             e = dt.date.fromisoformat(end_date) if end_date else a
+            if s > e:
+                raise ValueError("start_date must be on or before end_date")
             return s, e, f"{s.isoformat()} to {e.isoformat()}"
         p = (period or "last_30_days").lower().replace(" ", "_")
+        if p in {"all_time", "all", "entire_history"}:
+            return min((t.date for t in self.txns), default=a), self.as_of, "all available history"
         if p == "this_month":
             return a.replace(day=1), a, f"{a:%B %Y} (to date)"
         if p == "last_month":
             s = add_months(a.replace(day=1), -1)
             return s, a.replace(day=1) - dt.timedelta(days=1), f"{s:%B %Y}"
+        if p in {"today", "yesterday"}:
+            day = a - dt.timedelta(days=p == "yesterday")
+            return day, day, p
+        if p in {"this_week", "last_week"}:
+            monday = a - dt.timedelta(days=a.weekday())
+            if p == "last_week":
+                return monday - dt.timedelta(days=7), monday - dt.timedelta(days=1), "last calendar week"
+            return monday, a, "this calendar week"
+        if p == "last_year":
+            return dt.date(a.year - 1, 1, 1), dt.date(a.year - 1, 12, 31), str(a.year - 1)
         if re.fullmatch(r"\d{4}-\d{2}", p):
             s = dt.date.fromisoformat(p + "-01")
             return s, add_months(s, 1) - dt.timedelta(days=1), f"{s:%B %Y}"
         m = re.fullmatch(r"last_(\d+)_days?", p)
-        days = int(m.group(1)) if m else (90 if "90" in p else 30)
+        days = int(m.group(1)) if m else 30
         if p == "this_year":
             return a.replace(month=1, day=1), a, f"{a.year} (to date)"
+        if not m:
+            raise ValueError(f"Unsupported period: {period}")
+        if not 1 <= days <= 36500:
+            raise ValueError("Period must be between 1 and 36500 days")
         return a - dt.timedelta(days=days - 1), a, f"last {days} days"
 
     # ------------------------------------------------------------------ tools
     def get_overview(self) -> dict[str, Any]:
         bal, as_of = self.balance_info
-        start = as_of - dt.timedelta(days=29)
-        recent = [t for t in self.txns if t.date >= start]
+        start, end, _ = self.period_range("last_30_days")
+        recent = [t for t in self.txns if start <= t.date <= end]
+        quality = self.data_quality()
+        outflows = [t for t in recent if t.amount < 0]
+        spending_outflows = [t for t in outflows if is_spending_flow(t.category, t.amount)]
         income = sum(t.amount for t in recent if t.category == "income")
-        spend = sum(-t.amount for t in recent if t.category not in NON_SPEND)
+        spend = sum(-t.amount for t in recent if is_spending_flow(t.category, t.amount))
         by_cat: dict[str, float] = defaultdict(float)
         for t in recent:
-            if t.category not in NON_SPEND:
+            if is_spending_flow(t.category, t.amount):
                 by_cat[t.category] += -t.amount
         subs = [r for r in self.recurring if r.kind == "subscription" and r.status == "active"]
         return {
             "as_of": as_of.isoformat(),
             "currency": self.currency,
-            "balance": bal,
+            "balance": bal if quality["balance_known"] else None,
             "last_30_days": {
+                "start": start.isoformat(),
+                "end": end.isoformat(),
                 "income": round(income, 2),
                 "spend": round(spend, 2),
+                "cash_outflows": round(sum(-t.amount for t in outflows), 2),
+                "cash_outflow_count": len(outflows),
+                "spending_outflow_count": len(spending_outflows),
+                "excluded_outflows": round(sum(-t.amount for t in outflows if t.category in NON_SPEND), 2),
+                "spending_definition": "Spending excludes transfers and investments. Cash outflows include every recorded debit.",
                 "savings_rate_pct": round((income - spend) / income * 100, 1) if income else None,
             },
             "top_categories_30d": [
@@ -190,6 +253,7 @@ class FinanceToolkit:
                 ),
             },
             "transactions": len(self.txns),
+            "data_quality": quality,
             "goals": [
                 {"name": g.name, "target": g.target, "saved": g.saved, "deadline": g.deadline.isoformat()}
                 for g in self.goals
@@ -206,15 +270,27 @@ class FinanceToolkit:
     ) -> dict[str, Any]:
         s, e, desc = self.period_range(period, start_date, end_date)
         cats = resolve_categories(category)
-        m_q = (merchant or ("" if cats or not category else category) or "").lower()
+        if category and not cats:
+            raise ValueError(f"Unknown category: {category}")
+        m_q = (merchant or "").strip()
         rows = [t for t in self.txns if s <= t.date <= e and t.amount < 0]
         if cats:
             rows = [t for t in rows if t.category in cats]
         elif not m_q:
             rows = [t for t in rows if t.category not in NON_SPEND]
         if m_q:
-            rows = [t for t in rows if m_q in t.merchant.lower() or m_q in t.description.lower()]
-        total = sum(-t.amount for t in rows)
+            rows = [t for t in rows if merchant_matches(m_q, t.merchant, t.description)]
+        total = sum((-Decimal(str(t.amount)) for t in rows), Decimal("0"))
+        refunds = [
+            t
+            for t in self.txns
+            if s <= t.date <= e
+            and t.amount > 0
+            and is_spending_flow(t.category, t.amount)
+            and (not cats or t.category in cats)
+            and (not m_q or merchant_matches(m_q, t.merchant, t.description))
+        ]
+        refund_total = sum((Decimal(str(t.amount)) for t in refunds), Decimal("0"))
         merchants = Counter()
         by_cat: dict[str, float] = defaultdict(float)
         monthly: dict[str, float] = defaultdict(float)
@@ -228,13 +304,18 @@ class FinanceToolkit:
             "start": s.isoformat(),
             "end": e.isoformat(),
             "filter": {"categories": [label(c) for c in cats], "merchant": m_q or None},
-            "total": round(total, 2),
+            "total": float(round(total, 2)),
+            "refunds": float(round(refund_total, 2)),
+            "net_total": float(round(total - refund_total, 2)),
             "count": len(rows),
-            "avg_per_txn": round(total / len(rows), 2) if rows else 0.0,
-            "per_month_rate": round(total / days * 30.4, 2) if days else 0.0,
+            "avg_per_txn": float(round(total / len(rows), 2)) if rows else 0.0,
+            "per_month_rate": round(float(total) / days * 30.4, 2) if days else 0.0,
             "by_category": {label(c): round(v, 2) for c, v in sorted(by_cat.items(), key=lambda kv: -kv[1])},
             "top_merchants": [{"merchant": m, "amount": round(a, 2)} for m, a in merchants.most_common(5)],
             "monthly": {k: round(v, 2) for k, v in sorted(monthly.items())},
+            "transaction_ids": [t.id for t in rows],
+            "matched_merchants": sorted({t.merchant for t in rows}),
+            "data_as_of": self.as_of.isoformat(),
         }
 
     def search_transactions(
@@ -243,19 +324,59 @@ class FinanceToolkit:
         category: str | None = None,
         min_amount: float | None = None,
         limit: int = 10,
+        period: str | None = "all_time",
+        start_date: str | None = None,
+        end_date: str | None = None,
     ) -> dict[str, Any]:
         cats = resolve_categories(category)
-        q = (query or "").lower()
+        if category and not cats:
+            raise ValueError(f"Unknown category: {category}")
+        if min_amount is not None and (not math.isfinite(min_amount) or min_amount < 0):
+            raise ValueError("min_amount must be a finite nonnegative number")
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        s, e, desc = self.period_range(period, start_date, end_date)
+        q = (query or "").strip()
         rows = [
             t
             for t in self.txns
-            if (not q or q in t.merchant.lower() or q in t.description.lower())
+            if s <= t.date <= e
+            and (not q or merchant_matches(q, t.merchant, t.description))
             and (not cats or t.category in cats)
             and (min_amount is None or abs(t.amount) >= min_amount)
         ]
-        rows = sorted(rows, key=lambda t: t.date, reverse=True)[: max(1, min(int(limit or 10), 50))]
+        total_count = len(rows)
+        possible: dict[str, list[int]] = {}
+        tokens = normalize_text(q).split()
+        if q and not rows and len(tokens) >= 2:
+            for t in self.txns:
+                if not s <= t.date <= e or (cats and t.category not in cats):
+                    continue
+                for fragment in [t.merchant, *t.description.split("/")]:
+                    words = normalize_text(fragment).split()
+                    if len(words) != len(tokens) or words[0] != tokens[0]:
+                        continue
+                    if all(
+                        a == b or (len(b) >= 4 and a.startswith(b))
+                        for a, b in zip(tokens, words, strict=True)
+                    ):
+                        ids = possible.setdefault(fragment.strip(), [])
+                        if t.id not in ids:
+                            ids.append(t.id)
+        rows = sorted(rows, key=lambda t: (t.date, t.time or dt.time(), t.id), reverse=True)[: min(limit, 50)]
         return {
-            "count": len(rows),
+            "count": total_count,
+            "returned_count": len(rows),
+            "truncated": total_count > len(rows),
+            "period": desc,
+            "start": s.isoformat(),
+            "end": e.isoformat(),
+            "filter": {"query": q or None, "categories": cats, "min_amount": min_amount},
+            "covers_all_recorded_transactions_in_period": len(rows)
+            == sum(s <= t.date <= e for t in self.txns),
+            "possible_matches": [
+                {"statement_name": name, "transaction_ids": ids} for name, ids in list(possible.items())[:5]
+            ],
             "transactions": [
                 {
                     "id": t.id,
@@ -263,6 +384,7 @@ class FinanceToolkit:
                     "merchant": t.merchant,
                     "amount": t.amount,
                     "category": label(t.category),
+                    "description": t.description,
                 }
                 for t in rows
             ],
@@ -272,6 +394,8 @@ class FinanceToolkit:
         from finpilot.models import RecurringSeries
 
         rows = self.session.query(RecurringSeries).filter_by(user_id=self.user_id, kind="subscription").all()
+        linked = {t.recurring_id for t in self.rows if t.recurring_id is not None}
+        rows = [r for r in rows if r.id in linked]
         items = [
             {
                 "merchant": r.merchant,
@@ -304,7 +428,9 @@ class FinanceToolkit:
             target = self.as_of + dt.timedelta(days=int(days_ahead))
         at = None
         if target:
-            i = max(0, min(eng.H - 1, (target - self.as_of).days - 1))
+            if not self.as_of < target <= eng.dates[-1]:
+                raise ValueError(f"Forecast date must be after {self.as_of} and on or before {eng.dates[-1]}")
+            i = (target - self.as_of).days - 1
             import numpy as np
 
             p10, p50, p90 = np.percentile(out.paths[:, i], [10, 50, 90])
@@ -326,9 +452,14 @@ class FinanceToolkit:
             "goals": res["goals"],
             "avg_monthly_net": res["summary"]["avg_monthly_net"],
             "upcoming_bills": res["upcoming"][:8],
+            "data_quality": self.data_quality(),
         }
 
     def simulate(self, adjustments: list[dict[str, Any]], full: bool = False) -> dict[str, Any]:
+        if not self.data_quality()["balance_known"]:
+            raise ValueError(
+                "Set a verified account balance in Settings or upload a statement with balances before checking affordability."
+            )
         adjs = [parse_adjustment(a, self.as_of) for a in adjustments or []]
         if not adjs:
             return {"error": "no valid adjustments"}
@@ -354,6 +485,8 @@ class FinanceToolkit:
         }
 
     def get_goals(self) -> dict[str, Any]:
+        if not self.data_quality()["balance_known"]:
+            return {"goals": [], "needs_balance": True}
         f = repo.latest_forecast(self.session, self.user_id)
         if f is not None:
             return {"goals": f.payload.get("goals", []), "as_of": f.payload.get("as_of")}
@@ -396,15 +529,17 @@ class FinanceToolkit:
             else:
                 trips.append(-t.amount)
             last = t.date
-        dining = self.get_spending(category="dining", period="last_90_days")["per_month_rate"]
         trips = [x for x in trips if x >= 2500]  # ignore bus tickets / day outings
         if trips:
             # a trip "like your last real one": the biggest past trip, plus ~30% for on-trip spending
             est = max(trips) * 1.3
             basis = f"your biggest past trip ({self.money(max(trips))}) + 30% for on-trip spending"
         else:
-            est = max(25000.0, dining * 3)
-            basis = "no past trips found; assumed a modest domestic trip"
+            return {
+                "estimate": None,
+                "basis": "No past trips found; supply a budget rather than guessing a cost.",
+                "past_trips": [],
+            }
         return {"estimate": round(est, -2), "basis": basis, "past_trips": [round(x, 2) for x in trips]}
 
     # ------------------------------------------------------------------ dispatch
@@ -412,6 +547,8 @@ class FinanceToolkit:
         fn = getattr(self, name, None)
         if name not in TOOL_NAMES or fn is None:
             return {"error": f"unknown tool {name}"}
+        if not isinstance(args, dict):
+            return {"error": "tool arguments must be a JSON object"}
         try:
             return fn(**(args or {}))
         except TypeError as exc:
@@ -505,7 +642,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
             "merchant": {"type": "string"},
             "period": {
                 "type": "string",
-                "description": "this_month | last_month | last_30_days | last_90_days | this_year | YYYY-MM",
+                "description": "all_time | this_month | last_month | last_30_days | last_90_days | this_year | YYYY-MM",
             },
             "start_date": {"type": "string"},
             "end_date": {"type": "string"},
@@ -519,6 +656,9 @@ TOOL_SPECS: list[dict[str, Any]] = [
             "category": {"type": "string"},
             "min_amount": {"type": "number"},
             "limit": {"type": "integer"},
+            "period": {"type": "string"},
+            "start_date": {"type": "string"},
+            "end_date": {"type": "string"},
         },
     ),
     _tool("get_subscriptions", "Active subscriptions with monthly cost, usage signals and price changes."),

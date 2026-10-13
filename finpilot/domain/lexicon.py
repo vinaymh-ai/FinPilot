@@ -237,11 +237,11 @@ MERCHANT_RULES: list[MerchantRule] = [
         "Bank transfer",
         "transfers",
     ),
-    # ---- Credit card bill payments are transfers (spend already counted on the card) ----------
+    # ---- Explicit credit-card repayments; an app name alone does not prove a bill payment ----
     R(
-        r"CRED ?CLUB|CREDIT ?CARD ?(BILL|PAYMENT)|CC ?BILL ?PAY|CARD ?BILL ?PAYMENT",
+        r"CREDIT ?CARD ?(BILL|PAYMENT)|CC ?BILL ?PAY|CARD ?BILL ?PAYMENT",
         "Credit card payment",
-        "transfers",
+        "credit_card_payment",
     ),
     # ---- Insurance ----------------------------------------------------------------------------
     R(

@@ -140,7 +140,7 @@ export default function Transactions() {
   const [q, setQ] = useState("");
   const [category, setCategory] = useState("");
   const [source, setSource] = useState("");
-  const [flag, setFlag] = useState<"" | "anomalies" | "recurring" | "impulse">("");
+  const [flag, setFlag] = useState<"" | "anomalies" | "recurring" | "impulse" | "review">("");
   const [page, setPage] = useState(1);
   const [adding, setAdding] = useState(false);
   const [drag, setDrag] = useState(false);
@@ -195,10 +195,12 @@ export default function Transactions() {
 
   const recat = useMutation({
     mutationFn: ({ t, category }: { t: Txn; category: string }) =>
-      api.patch<{ updated: number }>(`/transactions/${t.id}`, { category, apply_to_merchant: true }),
+      api.patch<{ updated: number }>(`/transactions/${t.id}`, { category, apply_to_merchant: !t.payment_provider && !t.needs_review }),
     onSuccess: (r, v) => {
-      toast.success(`Learned: ${v.t.merchant} → ${meta?.categories.find((c) => c.id === v.category)?.label}`, {
-        description: `${r.updated} transaction(s) updated; future imports will use this.`,
+      toast.success(`Updated: ${v.t.merchant} → ${meta?.categories.find((c) => c.id === v.category)?.label}`, {
+        description: v.t.payment_provider || v.t.needs_review
+          ? "Only this transaction was changed; other payments may have different purposes."
+          : `${r.updated} transaction(s) updated; future imports will use this.`,
       });
       qc.invalidateQueries({ queryKey: ["transactions"] });
     },
@@ -322,6 +324,7 @@ export default function Transactions() {
             {(
               [
                 ["anomalies", "Anomalies", TriangleAlert],
+                ["review", "Needs review", TriangleAlert],
                 ["recurring", "Recurring", Repeat],
                 ["impulse", "Impulse", Zap],
               ] as const
@@ -399,6 +402,8 @@ export default function Transactions() {
                     </td>
                     <td className="py-2.5">
                       <SourceBadge source={t.category_source} confidence={t.category_confidence} reason={t.category_reason} />
+                      {t.needs_review && <Badge tone="amber" title={t.category_reason ?? undefined}>Needs review</Badge>}
+                      <Badge>{t.transaction_kind.replace(/_/g, " ")}</Badge>
                     </td>
                     <td className={cn("num whitespace-nowrap pr-4 text-right font-medium", t.amount > 0 && "text-emerald-500")}>
                       {money(t.amount, { sign: true })}

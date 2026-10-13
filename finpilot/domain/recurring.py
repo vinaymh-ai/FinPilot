@@ -95,7 +95,9 @@ SUBSCRIPTION_LIKE = {"subscriptions", "health", "entertainment", "education"}
 
 def classify_kind(category: str, amount: float, group: str | None) -> str:
     if amount > 0:
-        return "income"
+        return "income" if category == "income" else "other"
+    if category == "credit_card_payment":
+        return "bill"
     if category == "subscriptions" or (group and category in SUBSCRIPTION_LIKE):
         return "subscription"
     return {

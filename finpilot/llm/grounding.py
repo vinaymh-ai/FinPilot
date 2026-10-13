@@ -8,6 +8,7 @@ deterministic template — a cheap, effective hallucination guard.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Iterable
 from typing import Any
@@ -17,6 +18,7 @@ _NUM_RE = re.compile(
     re.IGNORECASE,
 )
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}(-\d{2})?([T ][\d:.+Z-]*)?$")
+_ISO_TOKEN = re.compile(r"\b\d{4}-\d{2}(?:-\d{2})?\b")
 _SCALE = {"k": 1e3, "l": 1e5, "lakh": 1e5, "lakhs": 1e5, "cr": 1e7, "crore": 1e7, "m": 1e6}
 
 
@@ -44,7 +46,7 @@ def _collect(obj: Any, acc: list[float]) -> None:
     elif isinstance(obj, str):
         if _ISO_DATE.match(obj.strip()):
             return  # "2026-12-20" is a date, not three amounts (its parts would whitelist ₹2,000)
-        acc.extend(v for v, _ in extract_numbers(obj))
+        acc.extend(v for v, _ in extract_numbers(_ISO_TOKEN.sub("", obj)))
     elif isinstance(obj, dict):
         for v in obj.values():
             _collect(v, acc)
@@ -86,15 +88,27 @@ def _money_marked(text: str) -> list[bool]:
     return marks
 
 
-def check_grounding(text: str, *facts: Any) -> tuple[bool, list[float]]:
+def check_grounding(text: str, *facts: Any, strict: bool = False) -> tuple[bool, list[float]]:
     """Return (ok, ungrounded_numbers). Small integers (counts, months, days) and years are ignored."""
     allowed = allowed_numbers(*facts)
+    if strict:
+        raw: list[float] = []
+        for fact in facts:
+            _collect(fact, raw)
+        allowed = raw + [abs(v) * 100 for v in raw if 0 <= abs(v) <= 1]
     bad: list[float] = []
+    if strict:
+        dates = set(_ISO_TOKEN.findall(json.dumps(facts, default=str)))
+        unsupported_dates = set(_ISO_TOKEN.findall(text)) - dates
+        if unsupported_dates:
+            return False, [float(d[:4]) for d in sorted(unsupported_dates)]
+        text = _ISO_TOKEN.sub("", text)
     for (value, is_pct), money in zip(extract_numbers(text), _money_marked(text), strict=True):
-        if not is_pct and value <= 31 and float(value).is_integer():
+        if not money and not strict and not is_pct and value <= 31 and float(value).is_integer():
             continue  # day-of-month / counts / month numbers
         if 2000 <= value <= 2100 and float(value).is_integer() and not is_pct and not money:
             continue  # years ("₹2,000" is money, not a year)
-        if not _close(value, allowed):
+        close = any(abs(abs(value) - abs(c)) <= 0.01 for c in allowed) if strict else _close(value, allowed)
+        if not close:
             bad.append(value)
     return (not bad), bad
