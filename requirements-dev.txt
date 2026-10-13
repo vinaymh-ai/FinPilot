@@ -1,3 +1,6 @@
 -r requirements.txt
 pytest>=8.0
 ruff>=0.5
+# test fixtures: generate real PDF / legacy XLS statements
+reportlab>=4.0
+xlwt>=1.3

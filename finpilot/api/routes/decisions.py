@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
-from finpilot.api.deps import get_db
+from finpilot.api.deps import current_user_id, get_db, require_admin
 from finpilot.config import get_settings
 from finpilot.decisions.costs import savings_report
 from finpilot.decisions.jev import Choice, JevClient, JevError, get_jev
@@ -45,9 +45,15 @@ def list_decisions(
     action: str | None = None,
     run_id: int | None = None,
     limit: int = 100,
+    uid: int = Depends(current_user_id),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    q = select(Decision).order_by(Decision.id.desc()).limit(min(max(limit, 1), 500))
+    q = (
+        select(Decision)
+        .where(Decision.user_id == uid)
+        .order_by(Decision.id.desc())
+        .limit(min(max(limit, 1), 500))
+    )
     if purpose:
         q = q.where(Decision.purpose == purpose)
     if action:
@@ -58,7 +64,7 @@ def list_decisions(
 
 
 @router.get("/decisions/stats")
-def decision_stats(db: Session = Depends(get_db)) -> dict[str, Any]:
+def decision_stats(uid: int = Depends(current_user_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     by_kind: dict[str, dict[str, Any]] = {}
     for kind, n, tin, tout, cost, cached, ok, lat in db.execute(
         select(
@@ -70,7 +76,9 @@ def decision_stats(db: Session = Depends(get_db)) -> dict[str, Any]:
             func.sum(case((LLMCall.cached.is_(True), 1), else_=0)),
             func.sum(case((LLMCall.success.is_(True), 1), else_=0)),
             func.avg(LLMCall.latency_ms),
-        ).group_by(func.coalesce(LLMCall.kind, "llm"))
+        )
+        .where(LLMCall.user_id == uid)
+        .group_by(func.coalesce(LLMCall.kind, "llm"))
     ):
         by_kind[kind] = {
             "calls": n,
@@ -84,7 +92,7 @@ def decision_stats(db: Session = Depends(get_db)) -> dict[str, Any]:
     jev_by_purpose: dict[str, dict[str, Any]] = {}
     for purpose, n, tin, cost in db.execute(
         select(LLMCall.purpose, func.count(), func.sum(LLMCall.prompt_tokens), func.sum(LLMCall.cost_usd))
-        .where(LLMCall.kind == "jev")
+        .where(LLMCall.kind == "jev", LLMCall.user_id == uid)
         .group_by(LLMCall.purpose)
     ):
         jev_by_purpose[purpose or "?"] = {
@@ -95,9 +103,9 @@ def decision_stats(db: Session = Depends(get_db)) -> dict[str, Any]:
     acts: dict[str, dict[str, int]] = {}
     conf: dict[str, float] = {}
     for purpose, action, n, avg_conf in db.execute(
-        select(Decision.purpose, Decision.action, func.count(), func.avg(Decision.confidence)).group_by(
-            Decision.purpose, Decision.action
-        )
+        select(Decision.purpose, Decision.action, func.count(), func.avg(Decision.confidence))
+        .where(Decision.user_id == uid)
+        .group_by(Decision.purpose, Decision.action)
     ):
         acts.setdefault(purpose, {})[action] = n
         conf[f"{purpose}:{action}"] = round(float(avg_conf or 0), 3)
@@ -158,7 +166,7 @@ def get_decision_settings() -> dict[str, Any]:
     return jev_state()
 
 
-@router.put("/settings/decisions")
+@router.put("/settings/decisions", dependencies=[Depends(require_admin)])
 def update_decision_settings(body: JevSettingsUpdate, db: Session = Depends(get_db)) -> dict[str, Any]:
     j = get_jev()
     ov = j.overrides
@@ -170,7 +178,7 @@ def update_decision_settings(body: JevSettingsUpdate, db: Session = Depends(get_
     return jev_state()
 
 
-@router.post("/settings/decisions/test")
+@router.post("/settings/decisions/test", dependencies=[Depends(require_admin)])
 def test_decisions() -> dict[str, Any]:
     """One tiny live evaluation (bypassing the cache) to prove the Jev route works end to end."""
     base = get_jev()

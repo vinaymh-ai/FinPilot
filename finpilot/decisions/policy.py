@@ -33,6 +33,7 @@ from finpilot.decisions.jev import (
     confidence_from,
 )
 from finpilot.llm.client import current_run_id
+from finpilot.observability.context import current_user_id
 
 log = logging.getLogger(__name__)
 
@@ -89,8 +90,8 @@ def log_decisions(records: Iterable[DecisionRecord]) -> int:
 
     try:
         with session_scope() as s:
-            run_id = current_run_id()
-            s.add_all(Decision(run_id=run_id, **r.to_dict()) for r in rows)
+            run_id, user_id = current_run_id(), current_user_id()
+            s.add_all(Decision(run_id=run_id, user_id=user_id, **r.to_dict()) for r in rows)
     except Exception:  # noqa: BLE001 - the audit log must never break the decision itself
         log.warning("failed to write %d decision records", len(rows), exc_info=True)
         return 0

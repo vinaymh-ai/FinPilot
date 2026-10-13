@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from finpilot.agents.coordinator import Coordinator
 from finpilot.api import serializers as ser
@@ -16,10 +18,11 @@ from finpilot.domain.taxonomy import CATEGORY_IDS
 from finpilot.models import RecurringSeries, Transaction
 from finpilot.schemas import RecurringUpdate, TransactionCreate, TransactionUpdate
 from finpilot.services import repository as repo
-from finpilot.services.ingestion import ParsedRow, import_rows, parse_csv
+from finpilot.services.ingestion import ParsedRow, StatementError, import_rows, parse_file
 
 router = APIRouter()
-MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+log = logging.getLogger(__name__)
+MAX_UPLOAD_BYTES = 15 * 1024 * 1024  # PDF statements for a year can be several MB
 
 
 @router.get("/transactions")
@@ -133,31 +136,57 @@ def update_transaction(
 @router.post("/transactions/upload")
 async def upload(
     file: UploadFile = File(...),
+    password: str | None = Form(default=None),
     run: bool = True,
     uid: int = Depends(current_user_id),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    content = await file.read()
+    """Import a bank statement: CSV/TSV/TXT, Excel (.xlsx/.xls), HTML-as-XLS or PDF (optionally password-protected)."""
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(413, "file too large (max 5 MB)")
-    parsed = parse_csv(content)
-    if not parsed.rows:
+        raise HTTPException(413, f"file too large (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)")
+    try:
+        parsed = await run_in_threadpool(parse_file, content, file.filename, password=password or None)
+    except StatementError as exc:
+        log.warning("statement rejected: %s", exc, extra={"event": "upload_rejected", "code": exc.code})
         raise HTTPException(
-            422, {"message": "No valid rows found", "errors": parsed.errors, "mapping": parsed.mapping}
+            422, {"message": str(exc), "code": exc.code, "errors": [], "filename": file.filename}
+        ) from exc
+    if not parsed.rows:
+        log.warning(
+            "no transactions found in %s", file.filename,
+            extra={"event": "upload_empty", "format": parsed.format, "errors": parsed.errors[:5]},
+        )  # fmt: skip
+        raise HTTPException(
+            422,
+            {
+                "message": "No transactions found in the file",
+                "code": "no_rows",
+                "errors": parsed.errors[:10],
+                "warnings": parsed.warnings,
+                "mapping": parsed.mapping,
+                "format": parsed.format,
+                "filename": file.filename,
+            },
         )
     user = repo.get_or_create_user(db, uid)
     batch = import_rows(
-        db, user, parsed.rows, source="csv", filename=file.filename, errors=parsed.errors, total=parsed.total
+        db,
+        user,
+        parsed.rows,
+        source=parsed.format or "csv",
+        filename=file.filename,
+        errors=parsed.errors,
+        total=parsed.total,
     )
     result = None
     if run and batch.rows_imported:
-        from starlette.concurrency import run_in_threadpool
-
         result = await run_in_threadpool(Coordinator().run_pipeline, uid, trigger="upload")
     return {
         "batch": {
             "id": batch.id,
             "filename": batch.filename,
+            "format": parsed.format,
             "total": batch.rows_total,
             "imported": batch.rows_imported,
             "duplicates": batch.rows_duplicate,
@@ -165,6 +194,7 @@ async def upload(
             "errors": parsed.errors[:10],
             "warnings": parsed.warnings,
             "mapping": parsed.mapping,
+            "summary": parsed.summary,
         },
         "run": result,
     }

@@ -18,6 +18,10 @@ os.environ.update(
         "MESH_API_KEY": "",
         "LLM_FALLBACK_PROVIDERS": "",
         "MONTE_CARLO_PATHS": "200",
+        # single-user mode unless a test turns accounts on (see the `accounts` fixture)
+        "AUTH_ENABLED": "false",
+        "LOG_FILE": "",
+        "LANGSMITH_TRACING": "false",
     }
 )
 
@@ -42,6 +46,21 @@ def fresh_db() -> Iterator[None]:
     set_router(LLMRouter(Settings(llm_enabled=False)))
     set_jev(JevClient(Settings(jev_enabled=False)))
     yield
+
+
+@pytest.fixture
+def accounts(monkeypatch):
+    """Turn on multi-user mode (e-mail + password accounts) for one test."""
+    from finpilot.services.auth import limiter
+
+    s = get_settings()
+    monkeypatch.setattr(s, "auth_enabled", True)
+    monkeypatch.setattr(s, "allow_signup", True)
+    monkeypatch.setattr(s, "demo_accounts", True)
+    monkeypatch.setattr(s, "admin_emails", "")
+    limiter.reset()
+    yield s
+    limiter.reset()
 
 
 @pytest.fixture

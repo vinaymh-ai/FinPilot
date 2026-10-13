@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434/v1"
     custom_llm_base_url: str | None = None
     custom_llm_api_key: str | None = None
+    custom_llm_model: str | None = None
+    freellmapi_base_url: str = "http://localhost:3001/v1"
+    freellmapi_api_key: str | None = None
 
     # --- System One decisions (Jev) ---------------------------------------------------------
     # Closed-set judgments (which category, which intent, is this rewrite faithful?) go to
@@ -83,6 +86,29 @@ class Settings(BaseSettings):
     llm_price_in_per_1m: float = 0.15
     llm_price_out_per_1m: float = 0.60
 
+    # --- Observability -----------------------------------------------------------------------
+    log_file: str = str(ROOT_DIR / "logs" / "finpilot.log")  # JSON lines, rotated; "" disables the file
+    log_file_max_mb: int = 20
+    log_file_backups: int = 5
+    trace_payloads: bool = True  # store raw model request/response (clipped) for debugging
+    trace_max_chars: int = 20000  # per string field in a stored payload
+    trace_retention_days: int = 14  # payloads older than this are purged nightly
+    langsmith_tracing: bool = False  # opt-in: traces leave your machine (they contain financial data)
+    langsmith_api_key: str | None = None
+    langsmith_project: str = "finpilot"
+    langsmith_endpoint: str | None = None
+
+    # --- Accounts & authentication ------------------------------------------------------------
+    auth_enabled: bool = True  # false = single-user mode (no login; everything belongs to user 1)
+    allow_signup: bool = True
+    session_ttl_days: int = 14
+    cookie_secure: bool | None = None  # None = Secure cookies when the request came over HTTPS
+    admin_emails: str = ""  # comma-separated; otherwise the first account created becomes admin
+    demo_accounts: bool = True  # "Try the demo" creates a private, seeded account per visitor
+    demo_ttl_hours: int = 48
+    public_base_url: str | None = None  # used in password-reset emails (defaults to the request's origin)
+    password_min_length: int = 8
+
     # --- Finance defaults -------------------------------------------------------------------
     currency: str = "INR"
     timezone: str = "Asia/Kolkata"
@@ -108,6 +134,16 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @field_validator("cookie_secure", "safety_buffer", mode="before")
+    @classmethod
+    def _blank_is_unset(cls, v: object) -> object:
+        # `COOKIE_SECURE=` in a .env means "not set", not an invalid boolean
+        return None if isinstance(v, str) and not v.strip() else v
+
+    @property
+    def admin_email_list(self) -> list[str]:
+        return [e.strip().lower() for e in self.admin_emails.split(",") if e.strip()]
 
     @property
     def fallback_provider_list(self) -> list[str]:

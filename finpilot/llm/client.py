@@ -5,7 +5,8 @@ Responsibilities:
 * call it through the OpenAI SDK pointed at that provider's base URL (Mesh by default),
 * fall back to the next configured provider on failure,
 * cache deterministic calls (saves money — a priority when running on free/low budgets),
-* record every call (tokens, latency, success) against the active agent run for observability.
+* record every call (tokens, latency, success, raw request/response) against the active agent run,
+  user and HTTP request for observability (see finpilot.observability).
 
 If no provider is usable the router reports `available() == False` and every agent degrades
 to its deterministic path, so the product keeps working with zero LLM spend.
@@ -34,6 +35,8 @@ from finpilot.llm.providers import (
     resolve_api_key,
     resolve_base_url,
 )
+from finpilot.observability.calls import record_model_call
+from finpilot.observability.tracing import wrap_openai_client
 
 log = logging.getLogger(__name__)
 
@@ -96,6 +99,7 @@ class LLMResponse:
     completion_tokens: int = 0
     latency_ms: int = 0
     cached: bool = False
+    raw: dict[str, Any] | None = field(default=None, repr=False)  # provider's response, for traces
 
     @property
     def label(self) -> str:
@@ -176,6 +180,8 @@ class LLMRouter:
         if primary_name == env_provider:
             # env-level defaults only make sense for the provider they were written for
             candidates += [self._agent_default_model(agent), self.settings.llm_model]
+        if primary_name == "custom":
+            candidates.append(self.settings.custom_llm_model)
         primary = PROVIDERS.get(primary_name)
         out: list[tuple[ProviderSpec, str]] = []
         if primary is not None:
@@ -184,7 +190,8 @@ class LLMRouter:
         for name in self.settings.fallback_provider_list:
             spec = PROVIDERS.get(name)
             if spec and spec.name != primary_name:
-                out.append((spec, spec.default_model))
+                model = self.settings.custom_llm_model if name == "custom" else None
+                out.append((spec, model or spec.default_model))
         return [(s, m) for s, m in out if is_configured(s, self.settings)]
 
     def available(self, agent: str = "advisor") -> bool:
@@ -201,12 +208,14 @@ class LLMRouter:
         with self._lock:
             client = self._clients.get(cache_key)
             if client is None:
-                client = OpenAI(
-                    base_url=base_url,
-                    api_key=key,
-                    timeout=self.settings.llm_timeout_s,
-                    max_retries=self.settings.llm_max_retries,
-                    default_headers=spec.extra_headers or None,
+                client = wrap_openai_client(
+                    OpenAI(
+                        base_url=base_url,
+                        api_key=key,
+                        timeout=self.settings.llm_timeout_s,
+                        max_retries=self.settings.llm_max_retries,
+                        default_headers=spec.extra_headers or None,
+                    )
                 )
                 self._clients[cache_key] = client
         return client
@@ -236,12 +245,21 @@ class LLMRouter:
 
         errors: list[str] = []
         for spec, model in targets:
+            request = {
+                "provider": spec.name,
+                "model": model,
+                "messages": messages,
+                "tools": [t.get("function", {}).get("name") for t in tools] if tools else None,
+                "json_mode": json_mode,
+                "temperature": temp,
+                "max_tokens": max_tokens,
+            }
             cache_key = self._cache_key(spec.name, model, messages, json_mode, temp) if use_cache else None
             if cache_key:
                 hit = self._cache_get(cache_key)
                 if hit is not None:
                     resp = LLMResponse(content=hit, provider=spec.name, model=model, cached=True)
-                    self._record(agent, resp, success=True)
+                    self._record(agent, resp, success=True, request=request)
                     return resp
             try:
                 resp = self._call(
@@ -262,11 +280,12 @@ class LLMRouter:
                     LLMResponse(content=None, provider=spec.name, model=model),
                     success=False,
                     error=msg,
+                    request=request,
                 )
                 continue
             if cache_key and resp.content:
                 self._cache_put(cache_key, model, resp.content)
-            self._record(agent, resp, success=True)
+            self._record(agent, resp, success=True, request=request)
             return resp
         raise LLMError("; ".join(errors) or "all providers failed")
 
@@ -328,6 +347,7 @@ class LLMRouter:
             prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
             completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
             latency_ms=latency,
+            raw=_dump(completion),
         )
 
     # ----------------------------------------------------------------------------- cache/telemetry
@@ -363,7 +383,15 @@ class LLMRouter:
         except Exception:  # noqa: BLE001
             log.debug("cache write failed", exc_info=True)
 
-    def _record(self, agent: str, resp: LLMResponse, *, success: bool, error: str | None = None) -> None:
+    def _record(
+        self,
+        agent: str,
+        resp: LLMResponse,
+        *,
+        success: bool,
+        error: str | None = None,
+        request: dict[str, Any] | None = None,
+    ) -> None:
         entry = {
             "agent": agent,
             "provider": resp.provider,
@@ -377,14 +405,21 @@ class LLMRouter:
             "cost_usd": round(llm_cost_usd(resp.prompt_tokens, resp.completion_tokens, self.settings), 8),
         }
         log_step_call(entry)
-        from finpilot.db import session_scope
-        from finpilot.models import LLMCall
+        response = None
+        if success:
+            response = resp.raw or {
+                "content": resp.content,
+                "tool_calls": resp.tool_calls or None,
+                "cached": resp.cached,
+            }
+        record_model_call(entry, run_id=_run_id.get(), error=error, request=request, response=response)
 
-        try:
-            with session_scope() as s:
-                s.add(LLMCall(run_id=_run_id.get(), error=error, **entry))
-        except Exception:  # noqa: BLE001
-            log.debug("failed to record LLM call", exc_info=True)
+
+def _dump(completion: Any) -> dict[str, Any] | None:
+    try:
+        return completion.model_dump(exclude_none=True)
+    except Exception:  # noqa: BLE001 - a stub or non-pydantic response
+        return None
 
 
 _router: LLMRouter | None = None

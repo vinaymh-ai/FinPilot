@@ -211,6 +211,7 @@ export interface Dashboard {
   headline: string | null;
   profile: string[];
   last_run: AgentRun | null;
+  analysis_running?: boolean;
   latest_digest: Digest | null;
   goals: Goal[];
 }

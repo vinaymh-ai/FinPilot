@@ -29,7 +29,8 @@ def seed_demo(
     ds = generate(persona, months=months, end=end or dt.date.today(), seed=seed)
     repo.wipe_user_data(session, user_id)
     user = repo.get_or_create_user(session, user_id)
-    user.name = ds.display_name
+    if user.is_demo or not user.password_hash:  # a real account keeps its own name
+        user.name = ds.display_name
     user.current_balance = ds.opening_balance
     user.balance_as_of = min(t.date for t in ds.transactions) - dt.timedelta(days=1)
     rows = [ParsedRow(t.date, t.time, t.description, t.amount) for t in ds.transactions]

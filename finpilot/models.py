@@ -39,10 +39,11 @@ class TimestampMixin:
 
 class User(TimestampMixin, Base):
     __tablename__ = "users"
+    __table_args__ = (Index("uq_users_email", "email", unique=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120), default="Demo User")
-    email: Mapped[str | None] = mapped_column(String(255))
+    email: Mapped[str | None] = mapped_column(String(255))  # stored lower-cased; login identifier
     currency: Mapped[str] = mapped_column(String(8), default="INR")
     # Anchor balance: the account balance as of `balance_as_of`. Forecasts start from here.
     current_balance: Mapped[float] = mapped_column(Money, default=0.0)
@@ -51,6 +52,40 @@ class User(TimestampMixin, Base):
     telegram_chat_id: Mapped[str | None] = mapped_column(String(64))
     digest_email: Mapped[str | None] = mapped_column(String(255))
     digest_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # --- account ------------------------------------------------------------------------------
+    password_hash: Mapped[str | None] = mapped_column(String(255))  # scrypt; never returned by the API
+    email_verified: Mapped[bool | None] = mapped_column(Boolean, default=False)
+    is_admin: Mapped[bool | None] = mapped_column(Boolean, default=False)
+    is_demo: Mapped[bool | None] = mapped_column(Boolean, default=False)
+    disabled: Mapped[bool | None] = mapped_column(Boolean, default=False)
+    last_login_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AuthSession(Base):
+    """A signed-in browser/API client. Only the SHA-256 of the token is stored."""
+
+    __tablename__ = "auth_sessions"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    user_agent: Mapped[str | None] = mapped_column(String(255))
+    ip: Mapped[str | None] = mapped_column(String(64))
+
+
+class AuthToken(Base):
+    """One-time tokens (password reset). Hashed, expiring, single use."""
+
+    __tablename__ = "auth_tokens"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    purpose: Mapped[str] = mapped_column(String(24))  # password_reset
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ImportBatch(TimestampMixin, Base):
@@ -212,6 +247,12 @@ class LLMCall(TimestampMixin, Base):
     error: Mapped[str | None] = mapped_column(Text)
     kind: Mapped[str | None] = mapped_column(String(16), default="llm")  # llm (generative) | jev (decision)
     purpose: Mapped[str | None] = mapped_column(String(64))  # Jev: merchant_category, chat_route, …
+    user_id: Mapped[int | None] = mapped_column(Integer, index=True)  # who the call was made for
+    request_id: Mapped[str | None] = mapped_column(String(64), index=True)  # HTTP request that caused it
+    request_payload: Mapped[Any | None] = mapped_column(
+        JSON(none_as_null=True)
+    )  # raw request (clipped), see TRACE_PAYLOADS
+    response_payload: Mapped[Any | None] = mapped_column(JSON(none_as_null=True))  # raw response (clipped)
     cost_usd: Mapped[float | None] = mapped_column(Float)  # estimated from configured prices
 
 
@@ -223,6 +264,7 @@ class Decision(TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     run_id: Mapped[int | None] = mapped_column(ForeignKey("agent_runs.id", ondelete="SET NULL"), index=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, index=True)
     agent: Mapped[str] = mapped_column(String(32))
     purpose: Mapped[str] = mapped_column(String(48))  # merchant_category | chat_route | faithfulness | ...
     subject: Mapped[str] = mapped_column(String(255))  # what was decided about (merchant, message, …)

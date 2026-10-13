@@ -15,7 +15,7 @@ from starlette.concurrency import run_in_threadpool
 from finpilot.agents.chat import ChatAgent
 from finpilot.agents.coordinator import Coordinator
 from finpilot.api import serializers as ser
-from finpilot.api.deps import current_user_id, get_db
+from finpilot.api.deps import current_user_id, get_db, require_admin
 from finpilot.llm.client import run_context, step_call_log
 from finpilot.models import AgentRun, AgentStep, ChatMessage, Digest, LLMCall
 from finpilot.schemas import ChatRequest, RunRequest, SchedulerUpdate
@@ -48,6 +48,7 @@ def get_run(
         "run": ser.run(r, with_steps=True),
         "llm_calls": [
             {
+                "id": c.id,
                 "agent": c.agent,
                 "provider": c.provider,
                 "model": c.model,
@@ -203,7 +204,7 @@ def new_chat_session() -> dict[str, str]:
 
 
 @router.get("/llm/usage")
-def llm_usage(db: Session = Depends(get_db)) -> dict[str, Any]:
+def llm_usage(uid: int = Depends(current_user_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     rows = db.execute(
         select(
             LLMCall.agent,
@@ -215,7 +216,9 @@ def llm_usage(db: Session = Depends(get_db)) -> dict[str, Any]:
             func.avg(LLMCall.latency_ms),
             func.sum(case((LLMCall.cached.is_(True), 1), else_=0)),
             func.sum(case((LLMCall.success.is_(True), 1), else_=0)),
-        ).group_by(LLMCall.agent, LLMCall.provider, LLMCall.model)
+        )
+        .where(LLMCall.user_id == uid)
+        .group_by(LLMCall.agent, LLMCall.provider, LLMCall.model)
     ).all()
     items = [
         {
@@ -271,7 +274,7 @@ def get_scheduler() -> dict[str, Any]:
     }
 
 
-@router.put("/scheduler")
+@router.put("/scheduler", dependencies=[Depends(require_admin)])
 def update_scheduler(body: SchedulerUpdate, db: Session = Depends(get_db)) -> dict[str, Any]:
     try:
         scheduler.reschedule_digest(body.digest_cron)

@@ -562,6 +562,14 @@ def main() -> None:
         elif args.jev and not jev_client.available():
             print("--jev needs MESH_API_KEY (or JEV_PROVIDER=typesafe + TYPESAFE_API_KEY)", file=sys.stderr)
             sys.exit(2)
+        elif args.jev:
+            from evaluation.jev_eval import JevEvalError, preflight
+
+            try:
+                print(f"jev preflight … {preflight(jev_client)}", flush=True)
+            except JevEvalError as exc:
+                print(f"\n{exc}", file=sys.stderr)
+                sys.exit(2)
     print("categorization …", flush=True)
     cat = eval_categorization(dsets, llm_router, jev_client)
     if jev_client is not None:

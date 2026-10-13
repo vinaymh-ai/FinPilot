@@ -88,3 +88,23 @@ def test_grounding_does_not_mistake_money_for_a_year():
     facts = {"low_point": 8200, "deadline": "2026-12-20"}
     assert not check_grounding("Your balance could fall to ₹2,000 in November.", facts)[0]
     assert check_grounding("By December 2026 you could be at ₹8,200.", facts)[0]
+
+
+def test_indian_payment_rails_from_a_real_statement():
+    """Patterns seen in a real ICICI statement (identifiers changed)."""
+    from finpilot.agents.categorizer import CategorizerAgent, CatItem
+
+    agent = CategorizerAgent(use_jev=False, use_llm=False)
+    cases = [
+        (
+            "MMT/IMPS/600000000001/Transfer to Fam/RAMESH/State Bank of I",
+            60000,
+            "transfers",
+        ),  # not MakeMyTrip
+        ("UPI/RAMESH/9000000001@ybl/Payment fr/KARNATAKA/900000000001/YBL29f", -6000, "transfers"),
+        ("UPI/ICCL Mutua/mfautopay.elem/Indian Cle/HDFC BANK/100000000001/HDF58A6", -2000, "investments"),
+        ("UPI/Indian Rai/bdpg2.ir@sbi/Payment fr/State Bank/400000000001/AXLb747", -522.7, "travel"),
+        ("MAKEMYTRIP INDIA PVT LTD", -8000, "travel"),
+    ]
+    for desc, amt, cat in cases:
+        assert agent.rule_categorize(CatItem(1, desc, amt)).category == cat, desc

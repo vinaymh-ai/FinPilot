@@ -1,8 +1,9 @@
 """Background scheduler (APScheduler) — the proactive part of FinPilot.
 
-Two cron jobs, both configurable:
+Two cron jobs, both configurable, plus housekeeping:
 * `weekly_digest`   — re-runs the full agent graph and delivers the digest (in-app/email/Telegram)
 * `nightly_refresh` — re-runs analysis + forecast so the dashboard and advice stay current
+* `maintenance`     — purges old raw model payloads, expired sessions and expired demo accounts
 Run exactly one scheduler per deployment (SCHEDULER_ENABLED=false on extra API replicas).
 """
 
@@ -56,6 +57,13 @@ class SchedulerService:
             name="Nightly re-analysis",
             replace_existing=True,
         )
+        self._sched.add_job(
+            run_maintenance,
+            CronTrigger(hour=3, minute=17, timezone=self.settings.timezone),
+            id="maintenance",
+            name="Housekeeping",
+            replace_existing=True,
+        )
         self._sched.start()
         log.info(
             "scheduler started (digest: %s, refresh: %s, tz=%s)",
@@ -93,7 +101,8 @@ class SchedulerService:
     @staticmethod
     def _user_ids(digest_only: bool) -> list[int]:
         with session_scope() as s:
-            q = select(User.id)
+            # demo sandboxes are short-lived and should not spend model budget on schedules
+            q = select(User.id).where(User.is_demo.is_not(True), User.disabled.is_not(True))
             if digest_only:
                 q = q.where(User.digest_enabled.is_(True))
             return list(s.scalars(q))
@@ -115,6 +124,35 @@ class SchedulerService:
                 Coordinator().run_pipeline(uid, trigger="schedule")
             except Exception:  # noqa: BLE001
                 log.exception("scheduled refresh failed for user %s", uid)
+
+
+def run_maintenance() -> dict[str, Any]:
+    """Retention: drop raw payloads past TRACE_RETENTION_DAYS, expired sessions and demo accounts."""
+    import datetime as dt
+
+    from sqlalchemy import update
+
+    from finpilot.models import LLMCall
+    from finpilot.services.auth import purge_expired
+
+    s = get_settings()
+    cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(days=s.trace_retention_days)
+    result: dict[str, Any] = {}
+    try:
+        with session_scope() as db:
+            res = db.execute(
+                update(LLMCall)
+                .where(LLMCall.created_at < cutoff, LLMCall.request_payload.is_not(None))
+                .values(request_payload=None, response_payload=None)
+            )
+            result["payloads_purged"] = res.rowcount or 0
+            result.update(purge_expired(db))
+    except Exception:  # noqa: BLE001
+        log.exception("maintenance failed")
+        return result
+    if any(result.values()):
+        log.info("maintenance: %s", result, extra={"event": "maintenance", **result})
+    return result
 
 
 scheduler = SchedulerService()

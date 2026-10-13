@@ -31,6 +31,7 @@ from finpilot.decisions.policy import log_decisions, order_debias, record, top_p
 from finpilot.decisions.spec import chat_questions, chat_state
 from finpilot.domain.stats import add_months
 from finpilot.llm.client import LLMError
+from finpilot.observability.tracing import traceable
 from finpilot.services.toolkit import SYNONYMS, TOOL_SPECS, FinanceToolkit, resolve_categories
 
 log = logging.getLogger(__name__)
@@ -215,6 +216,7 @@ class ChatAgent(BaseAgent):
         }
 
     # ------------------------------------------------------------------ entry point
+    @traceable("chat.answer")
     def answer(
         self, kit: FinanceToolkit, question: str, history: list[dict[str, str]] | None = None
     ) -> dict[str, Any]:

@@ -38,7 +38,10 @@ without one.
 8. [Key design decisions](#8-key-design-decisions)
 9. [LLM providers — Mesh by default, bring your own](#9-llm-providers--mesh-by-default-bring-your-own)
 10. [API, project layout, deployment](#10-api-project-layout-deployment)
-11. [Limitations & roadmap](#11-limitations--roadmap)
+11. [Bank statements — any bank, any format](#11-bank-statements--any-bank-any-format)
+12. [Accounts & security](#12-accounts--security)
+13. [Observability & debugging](#13-observability--debugging)
+14. [Limitations & roadmap](#14-limitations--roadmap)
 
 ---
 
@@ -75,9 +78,11 @@ pip install -r requirements-dev.txt
 uvicorn finpilot.main:app --port 8000   # → http://localhost:8000  (UI + API + /docs)
 ```
 
-On first boot the demo account is seeded and the full agent graph runs once. Upload your own CSV on
-**Transactions** or switch demo personas in **Settings** (young professional · family with EMIs · freelancer with
-irregular income).
+Open the app and **create an account** (e-mail + password) or click **Try the demo** for a private, pre-filled
+sandbox. The first account is the administrator, and if you used FinPilot before accounts existed, it keeps that
+data. Upload a statement on **Transactions** (CSV, Excel or PDF from any bank), or load a demo persona in
+**Settings** (young professional · family with EMIs · freelancer with irregular income). Prefer no login on a
+personal machine? `AUTH_ENABLED=false` gives single-user mode, where the demo account is seeded on first boot.
 
 **Frontend dev mode:** `uvicorn finpilot.main:app --reload` + `cd frontend && npm run dev` → http://localhost:5173
 (Vite proxies `/api`). **Docker:** `docker compose up --build`. **Make targets:** `make setup | api | web | test | eval`.
@@ -299,9 +304,9 @@ Jev's own numbers are filled in by a live run (this repository never reports a m
    conditional routing; the step wrapper gives observability and graceful degradation (non-critical node fails →
    run continues; analysis fails → run aborts with the error recorded).
 10. **Production basics:** pydantic-settings config, SQLite by default / PostgreSQL via `DATABASE_URL`, idempotent
-   CSV imports (row fingerprints), per-user run locks, optional bearer token, structured JSON logs, Docker image
-   with health check and non-root user, CI (ruff, pytest, evaluation, frontend build). Keys live only in env vars —
-   never in the database or the UI.
+   statement imports (row fingerprints), per-user accounts and run locks, structured JSON logs with request ids,
+   raw model-call traces, Docker image with health check and non-root user, CI (ruff, pytest, evaluation, frontend
+   build). Keys live only in env vars — never in the database or the UI.
 
 ---
 
@@ -322,13 +327,21 @@ client = OpenAI(base_url="https://api.meshapi.ai/v1", api_key=os.getenv("MESH_AP
 | Anthropic | `ANTHROPIC_API_KEY` | `claude-haiku-4-5` | OpenAI-compatible endpoint |
 | Together | `TOGETHER_API_KEY` | `meta-llama/Llama-3.3-70B-Instruct-Turbo` | |
 | Ollama | `OLLAMA_BASE_URL` | `llama3.1:8b` | local, free, private |
-| Custom | `CUSTOM_LLM_BASE_URL` / `_API_KEY` | – | any OpenAI-compatible server |
+| FreeLLMAPI | `FREELLMAPI_API_KEY` (+ `FREELLMAPI_BASE_URL`) | `auto` | self-hosted router, one unified key; `auto:fast` / `auto:smart` |
+| Custom | `CUSTOM_LLM_BASE_URL` / `_API_KEY` / `_MODEL` | `auto` | any OpenAI-compatible server |
 
 * **Per-agent routing:** e.g. `CATEGORIZER_MODEL=openai/gpt-4o-mini`, `ADVISOR_MODEL=anthropic/claude-haiku-4.5`,
   or switch provider/model per agent at runtime on **Settings** (persisted; keys stay in `.env`). The Settings page
   lists Mesh's live model catalogue and has a **Test connection** button.
 * **Fallback chain:** `LLM_FALLBACK_PROVIDERS=groq,ollama` — tried in order if the primary fails; if all fail,
   agents fall back to their deterministic path. Every call is logged (tokens, latency, cache hit, success).
+
+**FreeLLMAPI or another unified gateway for local testing:** `LLM_PROVIDER=freellmapi` and
+`FREELLMAPI_API_KEY=<your unified key>` (base URL defaults to `http://localhost:3001/v1`, model `auto`), or
+`LLM_PROVIDER=custom` with `CUSTOM_LLM_BASE_URL`, `CUSTOM_LLM_API_KEY` and `CUSTOM_LLM_MODEL=auto`. Such gateways
+serve chat completions only: Jev decisions need a Mesh `rsk_` key (or `JEV_ENABLED=false` to use rules), and so
+does `python -m evaluation.run_eval --jev`, which now checks the key with one tiny call first and explains a
+rejected key, missing credits or an unreachable endpoint instead of crashing.
 
 > For the hackathon submission keep `LLM_PROVIDER=mesh` (the default) so that every LLM call goes through Mesh.
 
@@ -340,7 +353,9 @@ Interactive docs at **`/docs`**. Highlights:
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /api/transactions/upload` | CSV import (bank-export tolerant, idempotent) → runs the agents |
+| `POST /api/auth/signup` · `/login` · `/logout` · `/demo` · `GET /api/auth/session` | accounts (cookie session, or `issue_token` for a bearer token) |
+| `POST /api/auth/password/forgot` · `/reset` · `/change` · `/account/delete` | password lifecycle, account deletion |
+| `POST /api/transactions/upload` | statement import — CSV / Excel / PDF (optional `password`), idempotent → runs the agents |
 | `PATCH /api/transactions/{id}` | correct a category → merchant memory |
 | `POST /api/runs` | run the agent graph (`recategorize`, `deliver_digest`) |
 | `GET /api/runs/{id}` | step timeline + LLM calls (decision trail) |
@@ -354,6 +369,8 @@ Interactive docs at **`/docs`**. Highlights:
 | `GET /api/decisions` · `GET /api/decisions/stats` | System One decision log (probabilities, action taken) + spend & savings by kind |
 | `GET/PUT /api/settings/decisions` · `POST /api/settings/decisions/test` | Jev thresholds, order check, LLM cascade; live connection test |
 | `GET /api/evaluation` | self-evaluation results |
+| `GET /api/observability/calls[/{id}]` · `/summary` · `/logs` · `/status` | model calls with raw payloads, metrics, log viewer (admin) |
+| `POST /api/client-errors` | browser crash reports into the server log |
 
 ```
 finpilot/
@@ -361,11 +378,14 @@ finpilot/
   domain/       taxonomy · merchant lexicon · description normaliser · recurring detection · stats
   decisions/    Jev client (Mesh /v1/evaluate) · question specs · confidence policy · faithfulness guard · cost model
   llm/          provider registry · router (fallback, cache, telemetry) · grounding check
-  services/     ingestion · synthetic data · repository · toolkit (chat tools) · scheduler · notifier · seed
+  observability/ request context · access-log middleware · raw call recorder · LangSmith tracing
+  services/     statements/ (format readers, column mapping, PDF text parser) · ingestion · auth · synthetic data
+                repository · toolkit (chat tools) · scheduler (+ retention) · notifier · seed
   api/          FastAPI routers + serializers        main.py · models.py · config.py · db.py
 evaluation/     run_eval.py · jev_eval.py + jev_cases.py (labelled sets) · results/ (REPORT.md, latest.json)
 frontend/       React 19 + Vite + TypeScript + Tailwind 4 + Recharts + TanStack Query
-tests/          66 tests: domain logic, agents (fake LLM + simulated /v1/evaluate), Jev client & policy, ingestion, API
+tests/          128 tests: domain logic, agents (fake LLM + simulated /v1/evaluate), Jev, statement formats, accounts
+                & isolation, observability, API
 ```
 
 **Deploy for free:** `render.yaml` (Render free web service, Docker), or any Docker host / Hugging Face Docker
@@ -377,10 +397,80 @@ persistence. Run exactly one instance with `SCHEDULER_ENABLED=true`.
 
 ---
 
-## 11. Limitations & roadmap
+## 11. Bank statements — any bank, any format
 
-* Single-tenant by default (`current_user_id` dependency is the seam for real auth / multi-user).
-* No direct bank aggregation (Account Aggregator / Plaid) — CSV and manual entry only.
+Upload what your bank gives you; FinPilot works out the layout instead of expecting one.
+
+| Format | How it is read |
+|---|---|
+| CSV / TSV / TXT | delimiter and encoding sniffed; `;` and `\t` exports, cp1252 and UTF-8 with BOM |
+| Excel `.xlsx` / `.xls` | openpyxl / xlrd — real date cells, Excel serial dates, and "XLS" files that are really HTML or CSV |
+| PDF | pdfplumber tables (ruled and unruled), with a text-line parser for statements without table borders; password-protected PDFs prompt for the password; scanned (image-only) PDFs are reported as such |
+
+* **Header detection** scores every row for date / description / amount / debit / credit / balance vocabulary
+  (`Value Date`, `Transaction Remarks`, `Withdrawal Amount (INR)`, `Dr/Cr`, `Narration`…), skipping bank
+  letterheads, repeated page headers, opening-balance lines and footers. Files without a header are mapped from the
+  column contents; unfamiliar headers can be mapped by Jev, verified against the values.
+* **Values:** one date format per column (so 05/07 is never read two ways), `1,23,456.78`, `500 Cr`, `(250)`,
+  `250-`, `₹`, `Rs.`, `/-`; remarks wrapped over several lines are joined.
+* **Signs** come from separate debit/credit columns, a type column, Cr/Dr suffixes, or the running balance.
+* **Checks:** every import reports the date range, money in and out, and how many rows reconcile against the
+  statement's own running balance (100% for the ICICI CSV that previously failed). Re-uploading the same file
+  imports nothing twice.
+
+## 12. Accounts & security
+
+![Sign in](docs/screenshots/sign-in.png)
+
+* **Sign in with e-mail and password.** Passwords are hashed with scrypt; sessions are random tokens of which only
+  a SHA-256 is stored, sent as an `HttpOnly`, `SameSite=Lax` cookie (`Secure` over HTTPS). API clients can request
+  a bearer token instead (`issue_token: true`).
+* **Every account sees only its own data**: transactions, goals, runs, chats, decisions and model-call traces are
+  scoped by user; ids from another account return 404.
+* **Admin vs user:** the first account (or anyone in `ADMIN_EMAILS`) administers the server — model providers,
+  Jev thresholds, the digest schedule and the raw log viewer, which span all accounts. Everyone manages their own
+  profile, data and password.
+* **Try the demo:** each visitor gets a private, pre-filled account that is deleted after `DEMO_TTL_HOURS`, so
+  judges and testers never see each other's data.
+* **Protections:** a CSRF check (`X-Requested-With`) on cookie-authenticated writes and on sign-in; rate limits on
+  sign-in, sign-up, password reset and demo creation; constant-time comparisons and no account enumeration;
+  password change and reset sign out other sessions; security headers on every response.
+* **Password reset** e-mails a one-hour, single-use link through the SMTP settings. Without SMTP the link is
+  written to the server log for the operator to pass on.
+* `AUTH_ENABLED=false` restores single-user mode (no login; optional static `API_TOKEN`).
+
+## 13. Observability & debugging
+
+* **Every model call is recorded** (LLM and Jev, live or cached, success or failure) with its **raw request and
+  response**: the exact messages and tools sent, the provider's full JSON reply, tokens, latency, cost, the agent
+  run, the user and the HTTP request that caused it. Browse them on the **Observability** page: filter by kind,
+  status or text, and click a call to see the prompt, the answer and the raw JSON. Payloads stay in your database
+  (`TRACE_PAYLOADS`, clipped to `TRACE_MAX_CHARS`, purged after `TRACE_RETENTION_DAYS`).
+* **Structured logs:** a readable console plus a rotating JSON-lines file (`LOG_FILE`, default
+  `logs/finpilot.log`). Every line carries `request_id`, `user_id` and the agent `run_id`, and every request gets an
+  access-log line with its status and duration. Admins can search and live-tail the file on the Observability page;
+  `LOG_LEVEL=DEBUG` also logs raw model payloads.
+* **Request ids:** every response has an `X-Request-ID` header (an upstream proxy's id is kept). Server errors
+  return the id, so one id finds the failing request, its log lines and the model calls it made. Browser crashes are
+  reported to `/api/client-errors` and land in the same log.
+* **LangSmith (optional):** `LANGSMITH_TRACING=true` and `LANGSMITH_API_KEY=…` trace the LangGraph pipeline (each
+  agent a span), every OpenAI-SDK call, Jev decisions and chat turns as nested runs in project `LANGSMITH_PROJECT`.
+  It is off by default because traces contain financial data and leave your machine.
+
+| Model calls, latency and failures | One call: the prompt, the answer, the raw JSON |
+|---|---|
+| ![Observability](docs/screenshots/observability.png) | ![Call trace](docs/screenshots/call-trace.png) |
+
+```bash
+tail -f logs/finpilot.log | jq 'select(.level != "DEBUG") | {ts, level, request_id, user_id, msg}'
+jq 'select(.request_id == "3f9c0e…")' logs/finpilot.log   # everything one request did
+```
+
+## 14. Limitations & roadmap
+
+* Accounts are e-mail + password: no SSO, two-factor sign-in or e-mail verification yet, and the rate limiter is
+  per process (put a shared limiter or the reverse proxy in front of several replicas).
+* No direct bank aggregation (Account Aggregator / Plaid) — statement upload (CSV, Excel, PDF) and manual entry only. Scanned (image-only) PDFs need OCR first.
 * Forecast doesn't model annual seasonality (festivals, bonuses) with < 12 months of history.
 * Category budgets, multi-account/credit-card reconciliation and an Alembic migration history are next.
 * Mesh's `/v1/evaluate` is a **beta** endpoint whose contract may change; the client pins `X-Mesh-Version` and

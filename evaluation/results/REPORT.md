@@ -1,4 +1,4 @@
-# FinPilot self-evaluation (2026-10-12 12:04)
+# FinPilot self-evaluation (2026-10-12 21:29)
 
 Mode: **deterministic (no LLM)** · Test data: 5,631 synthetic transactions (9 statements, 3 personas × 3 seeds, 21.8% from long-tail merchants absent from our lexicon).
 
@@ -55,7 +55,7 @@ Model `typesafe/jev-1.13` via Mesh `POST /v1/evaluate`. Status: **pending — no
 | Chat routing (62 messages) | regex intent router | 50.0% intent accuracy; cannot refuse the 12 unsafe/off-topic messages or spot the 6 that need reasoning |
 | Faithfulness (24 drafts, 18 unfaithful) | numeric grounding check | catches **22%** of unfaithful drafts — 14 contain no wrong number at all |
 | Goal type (24 goal names) | keyword table | type 75%, spend-vs-keep 92% |
-| CSV columns (20 headers) | synonym list | 11 headers unrecognised |
+| CSV columns (20 headers) | header vocabulary | 2 headers unrecognised |
 
 ### Cost per 1,000 decisions (request sizes measured from the real request bodies; ≈4 chars/token)
 
