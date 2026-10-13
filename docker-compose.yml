@@ -1,24 +1,36 @@
-# docker compose up --build            → app on http://localhost:8000 (SQLite in a volume)
-# docker compose --profile postgres up  → same app backed by PostgreSQL
+# docker compose up --build → app + automatically initialized PostgreSQL
 services:
   app:
     build: .
     ports: ["8000:8000"]
-    env_file: [.env]
+    env_file:
+      - path: .env
+        required: false
     environment:
-      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/finpilot.db}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-finpilot}:${POSTGRES_PASSWORD:-finpilot}@postgres:5432/${POSTGRES_DB:-finpilot}
+      FREELLMAPI_BASE_URL: ${DOCKER_FREELLMAPI_BASE_URL:-http://host.docker.internal:3001/v1}
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes: ["finpilot-data:/data"]
     restart: unless-stopped
 
   postgres:
-    profiles: ["postgres"]
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: finpilot
-      POSTGRES_PASSWORD: finpilot
-      POSTGRES_DB: finpilot
+      POSTGRES_USER: ${POSTGRES_USER:-finpilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-finpilot}
+      POSTGRES_DB: ${POSTGRES_DB:-finpilot}
     volumes: ["pg-data:/var/lib/postgresql/data"]
-    ports: ["5432:5432"]
+    ports: ["127.0.0.1:${POSTGRES_PORT:-55432}:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
 
 volumes:
   finpilot-data:

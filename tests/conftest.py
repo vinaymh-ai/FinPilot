@@ -11,11 +11,17 @@ from typing import Any
 _TMP = tempfile.mkdtemp(prefix="finpilot-tests-")
 os.environ.update(
     {
-        "DATABASE_URL": f"sqlite:///{_TMP}/test.db",
+        "DATABASE_URL": os.environ.get("FINPILOT_TEST_DATABASE_URL", f"sqlite:///{_TMP}/test.db"),
         "SEED_DEMO_DATA": "false",
         "SCHEDULER_ENABLED": "false",
         "LLM_ENABLED": "false",
+        "LLM_PROVIDER": "mesh",
+        "LLM_MODEL": "",
         "MESH_API_KEY": "",
+        "FREELLMAPI_API_KEY": "",
+        "TYPESAFE_API_KEY": "",
+        "JEV_PROVIDER": "mesh",
+        "JEV_MODEL": "typesafe/jev-1.13",
         "LLM_FALLBACK_PROVIDERS": "",
         "MONTE_CARLO_PATHS": "200",
         # single-user mode unless a test turns accounts on (see the `accounts` fixture)

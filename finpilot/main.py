@@ -20,7 +20,7 @@ from finpilot.db import init_db, session_scope
 from finpilot.decisions.jev import get_jev
 from finpilot.llm.client import get_router
 from finpilot.logging_config import configure_logging
-from finpilot.models import Transaction
+from finpilot.models import Transaction, User
 from finpilot.observability.middleware import RequestContextMiddleware
 from finpilot.observability.tracing import configure_langsmith
 from finpilot.services import repository as repo
@@ -30,31 +30,27 @@ log = logging.getLogger("finpilot")
 
 
 def bootstrap() -> None:
-    """Create tables, restore runtime LLM overrides, seed + analyse the demo account on first boot.
-
-    With accounts enabled there is no shared user to seed: every visitor gets a private demo
-    account from "Try the demo", and a database from single-user mode is taken over by the first
-    account that signs up.
-    """
+    """Create tables and seed a new database once; the first signup claims the starter data."""
     s = get_settings()
     init_db()
-    seed = s.seed_demo_data and not s.auth_enabled
     with session_scope() as db:
         get_router().set_overrides(repo.get_setting(db, "llm_overrides", {}) or {})
         get_jev().set_overrides(repo.get_setting(db, "jev_overrides", {}) or {})
         if not s.auth_enabled:
             repo.get_or_create_user(db)
         empty = db.query(Transaction).first() is None
-        if empty and seed:
+        seed = s.seed_demo_data and empty and (not s.auth_enabled or db.query(User).first() is None)
+        if seed:
             from finpilot.services.seed import seed_demo
 
             seed_demo(db)
     run_maintenance()
-    if empty and seed:
+    if seed:
         from finpilot.agents.coordinator import Coordinator
 
         try:
-            Coordinator().run_pipeline(trigger="manual")
+            # First boot must work without API keys or a reachable model gateway.
+            Coordinator(use_llm=False, use_jev=False).run_pipeline(trigger="manual")
         except Exception:  # noqa: BLE001
             log.exception("initial demo analysis failed")
 

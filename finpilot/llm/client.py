@@ -24,8 +24,9 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 
-from openai import APIStatusError, BadRequestError, OpenAI
+from openai import APIConnectionError, APIStatusError, BadRequestError, OpenAI
 
 from finpilot.config import Settings, get_settings
 from finpilot.llm.providers import (
@@ -273,6 +274,11 @@ class LLMRouter:
                 )
             except Exception as exc:  # noqa: BLE001 - provider errors are heterogeneous
                 msg = f"{spec.name}:{model}: {type(exc).__name__}: {str(exc)[:300]}"
+                if isinstance(exc, APIConnectionError):
+                    endpoint = resolve_base_url(spec, self.settings)
+                    msg += f" Cannot reach {endpoint}."
+                    if urlsplit(endpoint).hostname in {"localhost", "127.0.0.1", "::1"}:
+                        msg += " In Docker, use host.docker.internal to reach a gateway on the host."
                 errors.append(msg)
                 log.warning("LLM call failed (%s) — trying next provider", msg)
                 self._record(

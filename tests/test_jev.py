@@ -41,6 +41,20 @@ def pick_family(state, keys):
 
 
 # ============================================================================ client contract
+@pytest.mark.parametrize(
+    "provider,model,expected",
+    [
+        ("mesh", "typesafe/jev-1.13", "typesafe/jev-1.13"),
+        ("typesafe", "typesafe/jev-1.13", "jev-1.13.0"),
+        ("typesafe", "jev-1.13", "jev-1.13.0"),
+        ("typesafe", "jev-1.13.0", "jev-1.13.0"),
+        ("typesafe", "jev-latest", "jev-latest"),
+    ],
+)
+def test_provider_model_ids(provider, model, expected):
+    assert JevClient(Settings(jev_provider=provider, jev_model=model)).model == expected
+
+
 def test_validation_mirrors_the_api_rules():
     c = JevClient(Settings(mesh_api_key="rsk_x"))
     with pytest.raises(JevRequestError):
@@ -89,7 +103,7 @@ def test_mesh_request_shape_and_typed_answers(fake_jev_factory):
 
 def test_typesafe_direct_route_keeps_structured_criteria():
     c = JevClient(Settings(jev_provider="typesafe", typesafe_api_key="ts_x"))
-    assert c.model == "jev-1.13"
+    assert c.model == "jev-1.13.0"
     body = c.body("s", {"q": Choice("?", {"a": {"what": "A", "examples": ["x"]}, "b": "B"})})
     assert body["questions"]["q"]["criteria"]["a"] == {"what": "A", "examples": ["x"]}
     assert "tags" not in body  # Mesh-only attribution field

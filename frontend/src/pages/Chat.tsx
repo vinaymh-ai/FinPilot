@@ -103,7 +103,9 @@ export default function Chat() {
   useEffect(() => {
     if (data) setMessages(data.messages);
   }, [data]);
-  useEffect(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), [messages]);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   const send = useMutation({
     mutationFn: (message: string) =>

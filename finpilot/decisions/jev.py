@@ -302,7 +302,11 @@ class JevClient:
     def model(self) -> str:
         m = self.settings.jev_model
         # Mesh namespaces models by vendor ("typesafe/jev-1.13"); TypeSafe's own API does not.
-        return m.split("/", 1)[1] if self.provider == "typesafe" and m.startswith("typesafe/") else m
+        if self.provider == "typesafe":
+            m = m.removeprefix("typesafe/")
+            # The direct API requires the full release id, unlike Mesh's model alias.
+            return "jev-1.13.0" if m == "jev-1.13" else m
+        return m
 
     def _endpoint(self) -> tuple[str, str | None]:
         if self.provider == "typesafe":

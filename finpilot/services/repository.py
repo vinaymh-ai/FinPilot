@@ -6,7 +6,7 @@ import datetime as dt
 from collections import defaultdict
 from typing import Any
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.orm import Session
 
 from finpilot.agents.forecaster import GoalInput
@@ -35,6 +35,15 @@ def get_or_create_user(session: Session, user_id: int = DEFAULT_USER_ID) -> User
         s = get_settings()
         user = User(id=user_id, name="Demo User", currency=s.currency, current_balance=0.0)
         session.add(user)
+        session.flush()
+        if session.get_bind().dialect.name == "postgresql":
+            # Explicit starter ids do not advance PostgreSQL's sequence; future signups must.
+            session.execute(
+                text(
+                    "SELECT setval(pg_get_serial_sequence('users', 'id'), "
+                    "GREATEST((SELECT MAX(id) FROM users), nextval(pg_get_serial_sequence('users', 'id'))))"
+                )
+            )
         session.commit()
     return user
 

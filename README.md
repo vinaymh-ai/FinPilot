@@ -82,10 +82,58 @@ Open the app and **create an account** (e-mail + password) or click **Try the de
 sandbox. The first account is the administrator, and if you used FinPilot before accounts existed, it keeps that
 data. Upload a statement on **Transactions** (CSV, Excel or PDF from any bank), or load a demo persona in
 **Settings** (young professional · family with EMIs · freelancer with irregular income). Prefer no login on a
-personal machine? `AUTH_ENABLED=false` gives single-user mode, where the demo account is seeded on first boot.
+personal machine? `AUTH_ENABLED=false` gives single-user mode. With `SEED_DEMO_DATA=true`, a new database is
+populated on first boot, and the first signup inherits the starter data. Subsequent accounts start empty.
 
 **Frontend dev mode:** `uvicorn finpilot.main:app --reload` + `cd frontend && npm run dev` → http://localhost:5173
 (Vite proxies `/api`). **Docker:** `docker compose up --build`. **Make targets:** `make setup | api | web | test | eval`.
+
+### Docker with PostgreSQL
+
+Requires Docker Compose 2.24+ (the `.env` file is optional). Run:
+
+```bash
+docker compose up --build -d
+```
+
+Open http://localhost:8000. Compose creates the `finpilot` PostgreSQL database, waits for it to become healthy,
+then the app creates its tables and loads eight months of sample transactions, goals, forecasts and advice.
+Initial analysis uses deterministic agents, so startup requires no AI credentials. Create your first account
+to access that starter data, or use **Try the demo** for a private sandbox. Restarting preserves existing data
+and edits; set `SEED_DEMO_DATA=false` before the first start if you want an empty database.
+
+Database data persists in the `pg-data` volume. `docker compose down` keeps it. Existing SQLite files in
+`finpilot-data` remain available, but are not automatically imported into PostgreSQL.
+Compose uses its PostgreSQL service regardless of `DATABASE_URL`, which applies to runs outside Compose.
+Default local connection details (also usable in pgAdmin/DBeaver):
+
+| Host | Port | Database | Username | Password |
+| --- | --- | --- | --- | --- |
+| `localhost` | `55432` | `finpilot` | `finpilot` | `finpilot` |
+
+Configure `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` and `POSTGRES_PORT` in `.env` before the first start
+to override those defaults. Use a URL-safe password. For a Python backend running on your host, set
+`DATABASE_URL=postgresql+psycopg://finpilot:finpilot@localhost:55432/finpilot`.
+
+### FreeLLMAPI connection
+
+FreeLLMAPI must be running separately with working provider keys and its unified API key. In `.env`, set:
+
+```dotenv
+LLM_PROVIDER=freellmapi
+LLM_MODEL=auto
+FREELLMAPI_API_KEY=your-unified-key
+FREELLMAPI_BASE_URL=http://localhost:3001/v1
+```
+
+Compose overrides the gateway URL to `http://host.docker.internal:3001/v1`, because `localhost` inside the
+app container refers to that container. For a remote gateway or one on a shared Docker network, set
+`DOCKER_FREELLMAPI_BASE_URL` to its reachable URL instead. After changing `.env`, run
+`docker compose up -d` to recreate the app with the new environment, then use **Settings → Test connection**.
+
+Jev decisions use a separate API. For a direct TypeSafe connection, set `JEV_PROVIDER=typesafe`,
+`TYPESAFE_API_KEY` and `JEV_MODEL=jev-1.13.0`. The shorter `jev-1.13` id is rejected by TypeSafe; the client now
+translates Mesh's default alias for direct calls. `JEV_ENABLED=false` uses deterministic decisions instead.
 
 **Zero-cost mode.** Without a key (or with `LLM_ENABLED=false`) every agent completes its job deterministically —
 93% categorisation accuracy, full forecasting, simulation, advice with template text, and a rule-based chat that
