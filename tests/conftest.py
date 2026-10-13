@@ -16,6 +16,9 @@ os.environ.update(
         "SCHEDULER_ENABLED": "false",
         "LLM_ENABLED": "false",
         "MESH_API_KEY": "",
+        "LLM_PROVIDER": "mesh",
+        "LLM_MODEL": "",
+        "JEV_PROVIDER": "mesh",
         "LLM_FALLBACK_PROVIDERS": "",
         "MONTE_CARLO_PATHS": "200",
         # single-user mode unless a test turns accounts on (see the `accounts` fixture)
@@ -30,6 +33,10 @@ import datetime as dt  # noqa: E402
 import pytest  # noqa: E402
 
 from finpilot.config import Settings, get_settings  # noqa: E402
+
+# Tests never read the developer's .env (keys, a FreeLLMAPI provider, tuned thresholds…):
+# every setting comes from the pinned environment above or the code defaults.
+Settings.model_config["env_file"] = None
 from finpilot.db import Base, configure_database, get_engine, init_db, session_scope  # noqa: E402
 from finpilot.decisions.jev import JevClient, set_jev  # noqa: E402
 from finpilot.llm.client import LLMResponse, LLMRouter, set_router  # noqa: E402
