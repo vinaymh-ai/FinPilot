@@ -1,5 +1,9 @@
 # Agent reasoning and evidence
 
+**Current workflow:** see [API agents and financial evidence](API_AGENTS.md). The active default is
+API reasoning with Jev disabled, full advice despite unknown balances, and labelled relative cash-flow
+forecasts. The description below documents the earlier optional Jev workflow.
+
 Categorization separates the payment channel from the economic purpose. Rules resolve known cases and user
 corrections remain authoritative. Unresolved transactions reach the generative model with their full bank
 narration, signed amount, date, currency and related observations. The prompt permits inference from the payee's

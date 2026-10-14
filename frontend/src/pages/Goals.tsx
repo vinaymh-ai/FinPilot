@@ -26,7 +26,7 @@ function GoalTypeBadge({ g }: { g: Goal }) {
       ? `Classified by Jev (System One) from the goal's name — confidence ${g.type_confidence?.toFixed(2)}`
       : g.type_source === "user"
         ? "Set by you"
-        : "Classified by keyword rules (Jev not configured)";
+        : g.type_source === "llm" ? "Classified through API reasoning from the goal's name" : "Classified by fallback keyword rules";
   return (
     <Badge tone={g.type_source === "jev" ? "cyan" : g.type_source === "user" ? "green" : "neutral"} title={how}>
       {titleCase(g.goal_type)} · {g.spend_at_deadline ? "spent at deadline" : "kept as savings"}
@@ -225,7 +225,7 @@ export default function Goals() {
             <div>
               <Label hint="(changes the balance forecast after the deadline)">At the deadline, the money is…</Label>
               <Select value={form.spend_mode} onChange={(e) => setForm({ ...form, spend_mode: e.target.value as SpendMode })}>
-                <option value="auto">Let FinPilot decide from the name (Jev)</option>
+                <option value="auto">Let FinPilot reason from the name</option>
                 <option value="spend">Spent — a trip, a purchase, an event</option>
                 <option value="keep">Kept — an emergency fund, an investment</option>
               </Select>

@@ -135,6 +135,7 @@ def chat(
                 "trace": result["trace"],
                 "route": route,
                 "guard": result.get("guard"),
+                "planner": result.get("planner"),
                 "llm_calls": llm_calls or None,
                 "jev_calls": [c for c in calls if c.get("kind") == "jev"] or None,
             },
@@ -159,6 +160,7 @@ def chat(
         "trace": result["trace"],
         "model": result["model"],
         "route": route,
+        "planner": result.get("planner"),
         "run_id": run.id,
         "session_id": body.session_id,
     }

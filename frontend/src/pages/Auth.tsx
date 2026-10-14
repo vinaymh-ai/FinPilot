@@ -23,7 +23,7 @@ function AuthLink(props: LinkProps) {
 
 const POINTS = [
   { icon: Bot, title: "Six agents, one plan", text: "Categorise, analyse, forecast, advise and brief you every week." },
-  { icon: Scale, title: "Calibrated decisions", text: "Closed-set calls go to Jev with probabilities you can audit." },
+  { icon: Scale, title: "Auditable reasoning", text: "API agents explain decisions using your recorded financial evidence." },
   { icon: FileSpreadsheet, title: "Any bank statement", text: "CSV, Excel or PDF from any Indian bank — even password-protected." },
   { icon: ShieldCheck, title: "Private by design", text: "Your data stays in your account. Keys never leave the server." },
 ];

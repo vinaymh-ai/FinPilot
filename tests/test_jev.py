@@ -56,7 +56,7 @@ def test_provider_model_ids(provider, model, expected):
 
 
 def test_validation_mirrors_the_api_rules():
-    c = JevClient(Settings(mesh_api_key="rsk_x"))
+    c = JevClient(Settings(mesh_api_key="rsk_x", jev_enabled=True))
     with pytest.raises(JevRequestError):
         c.evaluate("s", {"bad key": Noul("p?")}, agent="t", purpose="t")
     with pytest.raises(JevRequestError):

@@ -6,12 +6,13 @@ import html
 from typing import Any
 
 from finpilot.agents.base import BaseAgent
-from finpilot.decisions.guard import check_faithfulness
 from finpilot.llm.grounding import check_grounding
 
 SYSTEM_PROMPT = """You are the Digest agent of FinPilot. Write the opening of a short weekly money email to ONE user.
 You get their single most important insight, the single action we recommend, and a few numbers.
 Write 2 sentences: a warm, specific opener that states the insight, then why the action matters now.
+Preserve missing-data caveats and conditional savings. Cash-flow changes are not balances.
+Do not say all steady or no action needed simply because no supported recommendation was found.
 Use only numbers from the input. No greetings like "Dear user", no sign-off. Currency: {currency}.
 Respond with JSON only: {{"intro": "...", "subject": "<max 60 chars, specific>"}}"""
 
@@ -43,19 +44,25 @@ class DigestAgent(BaseAgent):
         insight_txt = (
             f"{insight['title']}. {insight['detail']}"
             if insight
-            else "Your spending matched your usual pattern."
+            else "The available records did not support a specific new insight."
         )
-        action_txt = f"{rec['title']} — {rec['message']}" if rec else "No action needed this week."
-        subject = f"FinPilot weekly: {rec['title']}" if rec else "FinPilot weekly: all steady"
+        action_txt = (
+            f"{rec['title']} — {rec['message']}"
+            if rec
+            else "Review data coverage and upcoming obligations; no supported action was identified."
+        )
+        subject = f"FinPilot weekly: {rec['title']}" if rec else "FinPilot weekly: review your records"
         lines = []
         if forecast:
             cps = {c["days"]: c for c in forecast.get("checkpoints", [])}
             cp = cps.get(30)
             if cp:
                 lines.append(
-                    f"Balance in 30 days: ~{_money(cp['p50'], currency)} "
+                    f"{'Net cash-flow change' if forecast.get('projection_type') == 'cashflow_change' else 'Balance'} in 30 days: ~{_money(cp['p50'], currency)} "
                     f"(range {_money(cp['p10'], currency)}–{_money(cp['p90'], currency)})"
                 )
+            if forecast.get("projection_type") == "cashflow_change":
+                lines.append("Starting balance is unverified; affordability and goal odds are unavailable.")
             for g in forecast.get("goals", [])[:3]:
                 lines.append(f"{g['name']}: {g['probability'] * 100:.0f}% likely by {g['deadline']}")
         intro = headline or insight_txt
@@ -67,7 +74,7 @@ class DigestAgent(BaseAgent):
                 "outlook": lines,
             }
             self.system_prompt = SYSTEM_PROMPT.format(currency=currency)
-            data, label_, _ = self.safe_ask_json(facts, max_tokens=300, temperature=0.4)
+            data, label_, _ = self.safe_ask_json(facts, max_tokens=800, temperature=0.1)
             if (
                 isinstance(data, dict)
                 and data.get("intro")
@@ -75,8 +82,7 @@ class DigestAgent(BaseAgent):
             ):
                 draft_subject = str(data.get("subject") or "")
                 subject_ok = bool(draft_subject) and check_grounding(draft_subject, facts, strict=True)[0]
-                (verdict,) = check_faithfulness(
-                    self.jev,
+                (verdict,) = self.validate(
                     [
                         (
                             "digest intro",
@@ -84,8 +90,6 @@ class DigestAgent(BaseAgent):
                             str(data["intro"]) + (f"\nSubject: {draft_subject}" if subject_ok else ""),
                         )
                     ],
-                    agent=self.name,
-                    enabled=self.use_jev,
                 )
                 if verdict.ok:
                     intro = str(data["intro"])
@@ -105,7 +109,9 @@ class DigestAgent(BaseAgent):
             action_txt,
         ]
         if rec and rec.get("monthly_impact"):
-            md.append(f"_Impact: about {_money(rec['monthly_impact'], currency)}/month._")
+            md.append(
+                f"_Conditional impact: about {_money(rec['monthly_impact'], currency)}/month if the proposed action and assumptions hold._"
+            )
         if rec and rec.get("reasoning"):
             md += ["", f"_Why: {rec['reasoning'][0]}_"]
         if lines:

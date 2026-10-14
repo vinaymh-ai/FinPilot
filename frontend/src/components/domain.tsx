@@ -330,11 +330,12 @@ export function GoalMini({ goal }: { goal: Goal }) {
   );
 }
 
-export function Verdict({ verdict }: { verdict: "affordable" | "stretch" | "not_affordable" }) {
+export function Verdict({ verdict }: { verdict: "affordable" | "stretch" | "not_affordable" | "needs_balance" }) {
   const map = {
     affordable: { tone: "green" as Tone, icon: <Check className="size-3.5" />, label: "Affordable" },
     stretch: { tone: "amber" as Tone, icon: <TriangleAlert className="size-3.5" />, label: "A stretch" },
     not_affordable: { tone: "red" as Tone, icon: <Ban className="size-3.5" />, label: "Not affordable" },
+    needs_balance: { tone: "amber" as Tone, icon: <TriangleAlert className="size-3.5" />, label: "Verify balance to decide affordability" },
   }[verdict];
   return (
     <Badge tone={map.tone} className="px-2.5 py-1 text-[12.5px]">

@@ -95,12 +95,12 @@ class Coordinator:
         router: LLMRouter | None = None,
         use_llm: bool = True,
         jev: JevClient | None = None,
-        use_jev: bool = True,
+        use_jev: bool | None = None,
     ):
         self.router = router or get_router()
         self.use_llm = use_llm
         self.jev = jev or get_jev()
-        self.use_jev = use_jev
+        self.use_jev = (jev is not None) if use_jev is None else use_jev
         self.settings = get_settings()
 
     # ------------------------------------------------------------------ public
@@ -291,12 +291,12 @@ class Coordinator:
         unc = sum(self._needs_classification(t) for t in rows)
         if n == 0:
             return {"plan": [], "n_transactions": 0}, "No transactions yet — nothing to analyse", {}
-        user = repo.get_or_create_user(session, uid)
-        balance_known = user.balance_source in {"statement", "user", "demo"}
-        plan = (["categorize"] if (unc or state.get("recategorize")) else []) + ["analyze"]
-        if balance_known:
-            plan += ["forecast", "advise"]
-        if state.get("deliver_digest") and balance_known:
+        plan = (["categorize"] if (unc or state.get("recategorize")) else []) + [
+            "analyze",
+            "forecast",
+            "advise",
+        ]
+        if state.get("deliver_digest"):
             plan.append("digest")
         llm = (
             self.router.describe("advisor")
@@ -432,7 +432,16 @@ class Coordinator:
         lite = [repo.to_lite(t) for t in rows]
         balance, as_of = repo.current_balance(session, user)
         series = repo.recurring_candidates(session, uid)
-        typed = ensure_goal_types(session, uid, as_of, user.currency, jev=self.jev, use_jev=self.use_jev)
+        typed = ensure_goal_types(
+            session,
+            uid,
+            as_of,
+            user.currency,
+            jev=self.jev,
+            use_jev=self.use_jev,
+            router=self.router,
+            use_llm=self.use_llm,
+        )
         goals = repo.goal_inputs(session, uid)
         agent = self._agent(
             "forecaster",
@@ -446,7 +455,10 @@ class Coordinator:
             as_of=as_of,
             goals=goals,
             exclude_ids={t.id for t in rows if t.is_anomaly},
-            safety_buffer=user.safety_buffer or self.settings.safety_buffer,
+            safety_buffer=user.safety_buffer
+            if user.safety_buffer is not None
+            else self.settings.safety_buffer,
+            balance_known=user.balance_source in {"statement", "user", "demo"},
         )
         result = agent.forecast(eng, currency=user.currency)
         history = repo.goal_history(session, uid)  # before this run's snapshot → used for adaptation
@@ -457,6 +469,8 @@ class Coordinator:
         session.commit()
         cp = {c["days"]: c for c in result["checkpoints"]}.get(90)
         summ = f"Balance {balance:,.0f} → ~{cp['p50']:,.0f} in 90 days (P50)" if cp else "Forecast ready"
+        if cp and result["projection_type"] == "cashflow_change":
+            summ = f"Net cash-flow change ~{cp['p50']:,.2f} in 90 days (P50); starting balance unverified"
         risky = [
             g["name"] for g in result["goals"] if g["status"] != "on_track" and g["status"] != "achieved"
         ]

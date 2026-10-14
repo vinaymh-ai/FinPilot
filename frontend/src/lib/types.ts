@@ -109,7 +109,7 @@ export interface Goal {
   projection: GoalProjection | null;
   goal_type: string | null;
   spend_at_deadline: boolean | null;
-  type_source: "jev" | "rules" | "user" | null;
+  type_source: "jev" | "llm" | "rules" | "user" | null;
   type_confidence: number | null;
 }
 
@@ -131,13 +131,15 @@ export interface UpcomingEvent {
 
 export interface ForecastSummary {
   as_of: string;
-  start_balance: number;
+  start_balance: number | null;
+  projection_type?: "balance" | "cashflow_change";
+  required_starting_balance_p90?: number;
   horizon_days: number;
   safety_buffer: number;
   low_point: { date: string; p50: number; p10: number };
   end_balance: { date: string; p10: number; p50: number; p90: number };
-  prob_overdraft: number;
-  prob_below_buffer: number;
+  prob_overdraft: number | null;
+  prob_below_buffer: number | null;
   first_risk_date: string | null;
   checkpoints: Checkpoint[];
   goals: GoalProjection[];
@@ -259,7 +261,7 @@ export interface Adjustment {
 
 export interface SimulationResult {
   adjustments: (Adjustment & { description: string })[];
-  verdict: "affordable" | "stretch" | "not_affordable";
+  verdict: "affordable" | "stretch" | "not_affordable" | "needs_balance";
   reasons: string[];
   baseline: ForecastSummary;
   scenario: ForecastSummary;

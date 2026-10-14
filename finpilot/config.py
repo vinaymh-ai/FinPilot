@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     # Closed-set judgments (which category, which intent, is this rewrite faithful?) go to
     # TypeSafe's Jev — a decision model that returns calibrated probabilities instead of text.
     # Default route is Mesh's POST /v1/evaluate, so every AI call still goes through Mesh.
-    jev_enabled: bool = True
+    jev_enabled: bool = False
     jev_provider: str = "mesh"  # mesh (POST /v1/evaluate) | typesafe (direct TypeSafe API)
     jev_model: str = "typesafe/jev-1.13"  # pin the version: the "-latest" alias can change answers
     jev_timeout_s: float = 20.0

@@ -83,12 +83,12 @@ export function ForecastChart({
         {sc && <Area dataKey="sband" name="Scenario P10–P90" stroke="none" fill="url(#sbandFill)" isAnimationActive={false} />}
         <Line dataKey="p50" name={sc ? "Baseline (P50)" : "Expected (P50)"} stroke="#10b981" strokeWidth={2.2} dot={false} isAnimationActive={false} />
         {sc && <Line dataKey="s50" name="With decision (P50)" stroke="#818cf8" strokeWidth={2.2} dot={false} isAnimationActive={false} />}
-        <ReferenceLine
+        {forecast.projection_type !== "cashflow_change" && <ReferenceLine
           y={forecast.safety_buffer}
           stroke="#f59e0b"
           strokeDasharray="5 5"
           label={{ value: "safety buffer", position: "insideBottomRight", fontSize: 10, fill: "#f59e0b" }}
-        />
+        />}
         <ReferenceLine y={0} stroke="#ef4444" strokeOpacity={0.5} />
         {goalLines.map((g) => (
           <ReferenceLine

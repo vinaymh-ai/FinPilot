@@ -25,7 +25,7 @@ def pipeline_objects():
         for i, (t, r) in enumerate(zip(ds.transactions, res, strict=True))
     ]
     rec = detect_recurring(lite)
-    report = AnalyzerAgent(router=OFFLINE).analyze(lite, rec)
+    report = AnalyzerAgent(router=OFFLINE).analyze(lite, rec, usage_overrides={"Zomato Gold": "rarely_used"})
     goals = [
         GoalInput(
             i,
@@ -77,14 +77,14 @@ def test_categorizer_memory_overrides_rules():
     assert (r.category, r.source) == ("groceries", "memory")
 
 
-def test_categorizer_llm_only_for_uncertain_unique_merchants(fake_router_factory):
+def test_categorizer_llm_reviews_all_automatic_narrations(fake_router_factory):
     def responder(messages, opts):
         payload = json.loads(messages[-1]["content"])
         return {
             "results": [
                 {
                     "id": m["id"],
-                    "category": "dining",
+                    "category": "food_delivery" if m["merchant"].upper() == "SWIGGY" else "dining",
                     "confidence": 0.9,
                     "merchant": "Truffles",
                     "reason": "Bengaluru restaurant chain",
@@ -101,10 +101,10 @@ def test_categorizer_llm_only_for_uncertain_unique_merchants(fake_router_factory
     ]
     items.append(CatItem(99, "UPI/DR/1/SWIGGY/YESB/swiggy@ybl/Payment", -300, dt.date(2026, 5, 1)))
     results, stats = agent.categorize(items)
-    assert len(router.calls) == 1  # five Truffles rows → ONE merchant in ONE batched call; Swiggy never sent
-    assert stats.llm_merchants == 1
+    assert len(router.calls) == 1  # distinct narrations share one batched API call
+    assert stats.llm_merchants == 6
     assert all(r.category == "dining" and r.source == "llm" for r in results[:5])
-    assert results[-1].source == "rule"
+    assert results[-1].source == "llm" and results[-1].category == "food_delivery"
 
 
 def test_categorizer_rejects_invalid_llm_categories(fake_router_factory):
@@ -127,7 +127,7 @@ def test_analyzer_finds_the_planted_patterns(pipeline_objects):
     kinds = {f.kind for f in report.findings}
     assert {"subscription_unused", "subscription_overlap", "anomaly_duplicate_charge", "anomaly_fee"} <= kinds
     unused = [s.merchant for s in report.subscriptions if s.unused]
-    assert unused == ["Zomato Gold"]  # Zomato orders stopped 3 months ago, membership kept billing
+    assert unused == ["Zomato Gold"]  # explicit usage confirmation, not absence of bank purchases
     flagged = {a.txn_id for a in report.anomalies}
     truth = {i for i, t in enumerate(ds.transactions) if t.anomaly}
     assert len(flagged & truth) >= 3

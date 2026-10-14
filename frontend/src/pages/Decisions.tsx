@@ -98,7 +98,7 @@ export default function Decisions() {
       {jev && !jev.available && (
         <Card className="border-amber-500/30 bg-amber-500/5 p-4 text-[13px]">
           <b>Jev is off</b> — {jev.enabled ? `set ${jev.key_env} in your .env` : "it is disabled in Settings"}. Every agent keeps working on its
-          deterministic fallback (lexicon, regex router, numeric grounding check); decisions appear here once Jev is on.{" "}
+          configured LLM API with exact financial tools and independent claim checks. This page retains optional legacy Jev history.{" "}
           <Link to="/settings" className="text-brand hover:underline">
             Settings →
           </Link>

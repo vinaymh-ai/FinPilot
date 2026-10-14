@@ -11,11 +11,11 @@ quantified, *auditable* recommendations. A background scheduler delivers a weekl
 **Every AI call routes through [Mesh API](https://developers.meshapi.ai)** (`https://api.meshapi.ai/v1`) by
 default — and the system still runs end-to-end with **zero LLM spend** (each agent has a deterministic path).
 
-**System One + System Two.** Closed-set *decisions* — which category, which chat intent, is this LLM paragraph
-faithful, is this goal money you'll spend — go to **[Jev](docs/JEV.md)** (TypeSafe's decision model, via Mesh
-`POST /v1/evaluate`): typed answers with calibrated probabilities, billed on input tokens only. The LLM reasons
-about uncertain transaction purposes and writes chat answers from verified retrievals. Greetings are conversational;
-financial answers use exact tools and validation. See [agent accuracy design](docs/AGENT_ACCURACY.md).
+**API agents with verified evidence.** Separate categorizer, analyzer, forecaster, advisor, chat planner
+and digest prompts reason over real transaction evidence. Exact tools compute money; independent API
+checks reject unsupported generated claims. Missing balances limit affordability conclusions while
+cash-flow projections and transaction-based advice continue. **Jev is disabled by default**; its optional
+legacy integration remains documented below. See the current [agent design](docs/API_AGENTS.md).
 
 ![Overview](docs/screenshots/overview.png)
 
@@ -133,14 +133,14 @@ app container refers to that container. For a remote gateway or one on a shared 
 
 Jev decisions use a separate API. For a direct TypeSafe connection, set `JEV_PROVIDER=typesafe`,
 `TYPESAFE_API_KEY` and `JEV_MODEL=jev-1.13.0`. The shorter `jev-1.13` id is rejected by TypeSafe; the client now
-translates Mesh's default alias for direct calls. `JEV_ENABLED=false` uses deterministic decisions instead.
+translates Mesh's default alias for direct calls. This optional legacy route is off by default;
+`JEV_ENABLED=false` keeps decisions on the configured LLM API.
 
 **Zero-cost mode.** Without a key (or with `LLM_ENABLED=false`) every agent completes its job deterministically —
 rule-based categorization, forecasting and simulation with a verified balance, template advice, and chat that
-calls the same tools. Adding a Mesh key turns on both systems with the same `rsk_` key: **Jev** decisions
-(long-tail categories, chat routing, the faithfulness guard, goal typing — fractions of a cent per thousand) and the
-**LLM** for transaction reasoning, narratives and conversational answers. You can also point the LLM side at a free provider (Groq,
-Gemini free tier, OpenRouter `:free`, local Ollama); `JEV_ENABLED=false` turns decisions back to rules.
+calls the same tools. Adding a Mesh key enables API reasoning for categories, query planning, advisor
+prioritization, goal typing, narratives and independent claim checks. FreeLLMAPI serves development
+calls; submission calls must use Mesh. Jev stays disabled unless explicitly selected as an optional route.
 
 ---
 
@@ -185,6 +185,9 @@ graph LR
 ---
 
 ## 4. System One decisions with Jev
+
+**Optional legacy integration:** the active default uses LLM API reasoning and API fact checking,
+with `JEV_ENABLED=false`. This section describes the retained opt-in implementation.
 
 The LLM supplies semantic reasoning and natural-language answers. **Jev** supplies closed-set routing,
 remaining category decisions and checks of whether generated claims are supported

@@ -75,7 +75,7 @@ def test_simulate_and_chat(client):
 
 def test_dismissed_recommendation_is_snoozed_on_next_run(client):
     recs = client.get("/api/recommendations").json()["recommendations"]
-    target = next(r for r in recs if r["kind"] == "cancel_unused_subscription")
+    target = next(r for r in recs if r["kind"] == "consolidate_subscriptions")
     client.patch(f"/api/recommendations/{target['id']}", json={"status": "dismissed"})
     assert client.post("/api/runs", json={}).json()["status"] == "succeeded"
     again = client.get("/api/recommendations").json()["recommendations"]
