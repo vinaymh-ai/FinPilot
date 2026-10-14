@@ -55,7 +55,7 @@ def test_categorizer_rules_and_reasons():
     cases = {
         "UPI/DR/1/SWIGGY/YESB/swiggy@ybl/Payment": ("food_delivery", "rule"),
         "POS 1234XXXXXX5678 SHRI GANESH MEDICALS": ("health", "keyword"),
-        "UPI/1/PRIYA NAIR/priya@oksbi": ("other", "review"),
+        "UPI/1/PRIYA NAIR/priya@oksbi": ("transfers", "p2p"),  # person-to-person, purpose unconfirmed
         "NEFT CR-HDFC0001234-ACME TECH PVT LTD SALARY": ("income", "rule"),
     }
     for desc, (cat, src) in cases.items():
@@ -101,8 +101,8 @@ def test_categorizer_llm_reviews_all_automatic_narrations(fake_router_factory):
     ]
     items.append(CatItem(99, "UPI/DR/1/SWIGGY/YESB/swiggy@ybl/Payment", -300, dt.date(2026, 5, 1)))
     results, stats = agent.categorize(items)
-    assert len(router.calls) == 1  # distinct narrations share one batched API call
-    assert stats.llm_merchants == 6
+    assert len(router.calls) == 1  # all uncertain merchants share one batched API call
+    assert stats.llm_merchants == 2  # one decision per merchant + direction, not per narration
     assert all(r.category == "dining" and r.source == "llm" for r in results[:5])
     assert results[-1].source == "llm" and results[-1].category == "food_delivery"
 

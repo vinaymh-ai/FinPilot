@@ -5,32 +5,45 @@ by default and is not called by the default agents; its optional code and histor
 
 ## Responsibilities
 
-- **Coordinator:** LangGraph runs categorize → analyze → forecast → advise, with scheduled digests.
-  Missing balance provenance no longer skips advice. Critical failures stop dependent work. Changed
+- **Coordinator:** LangGraph runs categorize → analyze → forecast → advise → audit, with scheduled digests.
+  The plan step records *why* each step runs, the transactions needing review and the model each agent
+  uses. Missing balance provenance no longer skips advice. Critical failures stop dependent work. Changed
   transaction, balance or goal inputs invalidate stale results. Steps record model calls and decisions.
-- **Categorizer:** API reasoning identifies the payee's business separately from transaction purpose,
-  using full narration, signed amount, date, currency and fallible rule suggestions. Uncertain intermediary
-  payments receive a second reasoning pass. Company words such as Club do not prove a membership fee.
-  Explicit rent/order/card evidence wins over unsupported inference. Manual/import labels and user memory
-  stay authoritative. Invalid model IDs, taxonomy values or confidence values are rejected. Unresolved
-  ambiguity requires review; model confidence is not a measured probability of correctness.
-- **Analyzer:** Exact aggregates establish trends, anomalies, debt obligations and bank cash flow.
-  Its own prompt interprets those facts with coverage caveats. Transfers/investments can leave the bank
-  without counting as consumption spending. Card bills do not reveal original purchases. Bank history
-  alone cannot prove a membership unused; that claim requires explicit usage confirmation.
+- **Categorizer:** memory → curated lexicon (family rules keep the matched brand, e.g. "Third Wave Coffee",
+  not "Café") → keyword *phrases* (a matched phrase hides the words inside it: "MILK PARLOUR" is a dairy) →
+  person-to-person detection (needs a common Indian name or a phone-number VPA; bank "P2A" markers count) →
+  **one LLM decision per uncertain merchant + direction** (79 groups instead of ~600 narrations on the demo)
+  → merchant consistency. The LLM prompt separates payee business from payment purpose, uses brand knowledge
+  (with examples that are deliberately *not* in the evaluation hold-out) and calibrated confidence. An unsure
+  model never erases specific evidence; a curated rule yields only to a confident model. P2P payments are
+  `transfers` with review-level confidence because the purpose is unknown. Manual/import labels and user
+  memory stay authoritative. Every transaction also records **direction** and **payment channel**.
+- **Analyzer:** Exact aggregates establish trends (with the merchants driving each spike), month-to-date pace
+  against the same days of last month, anomalies, debt obligations, bank cash flow and the review queue.
+  Its prompt writes 3-4 ordered observations, copying figures exactly. Bank history alone cannot prove a
+  membership unused; that claim requires explicit usage confirmation.
 - **Forecaster:** Recurring obligations plus historical variable cash flow produce seeded simulation
   paths. Shared masked loan references link narration changes. Monthly card obligations include every
   recorded bill across platforms, without asserting one card account. Varying bills/income sample actual
-  observed amounts. Weekday Bayesian bootstrap weights model uncertainty in estimated historical rates.
-  Scenario paths share draws; invalid amounts, cuts below -100% and out-of-horizon dates are rejected.
+  observed amounts. Scenario paths share draws; invalid amounts, cuts below -100% and out-of-horizon dates
+  are rejected. The narrative prompt copies figures exactly (strict grounding rejects rounding).
 - **Advisor:** An API decision step reasons over patterns, obligations, trajectory and goals to prioritize
-  evidence-derived actions. A separate phrasing step explains them. Every recommendation stores its trigger,
-  transaction/forecast evidence and reasoning. Review actions invent no savings or loan-interest benefit.
-- **Chat:** API query planning selects read-only tools; code calculates exact results; API generation
-  explains them. “Biggest expense” means an individual expense debit, distinct from merchant/category
-  totals. Matching uses payee identity rather than arbitrary bank/creditor text: CRED totals exclude Kiwi
-  merely mentioning ICICI Cred. Relative periods use the current calendar with explicit boundaries.
-  Chat history resolves references but never establishes financial facts. Greetings need no ledger access.
+  evidence-derived actions; a separate phrasing step explains them (evidence → action → effect). New actions:
+  confirm the review queue, slow a month-to-date spending pace. Every recommendation stores its trigger,
+  transaction/forecast evidence (including derived figures such as a funding plan's share of a goal gap)
+  and reasoning.
+- **Auditor:** Deterministic and independent of the models it checks. Each recommendation's trigger must
+  match a finding or forecast of the same run, evidence transaction ids must exist in the ledger, the trail
+  needs at least two reasoning steps and a finite impact, and every figure in the title/message must be
+  grounded in its evidence. The verdict is appended to the reasoning; failures are marked ungrounded. It also
+  reports categorization health (share of outflows needing review).
+- **Chat team:** guardrails (actions, injection, off-topic) → retriever (value linking to the user's merchants
+  and categories, BM25 over insights/recommendations/goals) → SQL Analyst for data questions (deterministic
+  parser when every word is explained, otherwise LLM text-to-SQL over a sandboxed per-user SQLite view with
+  schema, date anchors and retrieved values, repaired from database errors) or the planner for finance tools
+  → composer + verifier. Answers carry exact table/chart artifacts. "Biggest expense" means an individual
+  expense debit; payee matching uses whole names (CRED totals exclude Kiwi mentioning ICICI Cred); relative
+  periods use the current calendar; history resolves references but never establishes facts.
 - **Digest:** Its own prompt summarizes one supported insight and action. APScheduler drives delivery;
   an empty recommendation list does not mean all steady. Local verification never sends external messages.
 
@@ -65,7 +78,8 @@ precedence over `.env`; changing environment variables alone does not replace a 
 exact deltas, unknown-balance claims, usage evidence and invalid verdicts. Existing isolation, agent,
 API, ingestion, scheduler and optional Jev tests also run on SQLite and a separate PostgreSQL database.
 
-`python -m evaluation.run_eval --seeds 1 2` records reproducible synthetic categorization, detector,
-forecast and simulation metrics in `evaluation/results/latest.json` and `REPORT.md`. Offline results
+`python -m evaluation.run_eval --seeds 1 2 3` records reproducible synthetic categorization (with a frozen
+long-tail hold-out and precision when confident), a hand-labelled real-narration benchmark, detector,
+forecast, simulation and end-to-end chat answer accuracy in `evaluation/results/latest.json` and `REPORT.md`. Offline results
 do not measure live LLM accuracy. Live API cases are reported separately. Forecast coverage remains
 below the nominal 80%, particularly for irregular freelance income; accuracy is not guaranteed.

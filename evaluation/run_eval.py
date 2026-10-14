@@ -33,7 +33,7 @@ from finpilot.agents.categorizer import CategorizerAgent, CatItem  # noqa: E402
 from finpilot.agents.forecaster import Adjustment, ForecasterAgent  # noqa: E402
 from finpilot.config import Settings  # noqa: E402
 from finpilot.domain.lexicon import match_merchant  # noqa: E402
-from finpilot.domain.normalize import normalize_text  # noqa: E402
+from finpilot.domain.normalize import detect_channel, direction_of, normalize_text  # noqa: E402
 from finpilot.domain.recurring import TxnLite, detect_recurring  # noqa: E402
 from finpilot.domain.stats import add_months  # noqa: E402
 from finpilot.llm.client import LLMRouter, get_router  # noqa: E402
@@ -43,6 +43,36 @@ PERSONAS = ["young_professional", "family", "freelancer"]
 END = dt.date(2026, 9, 30)
 OFFLINE = LLMRouter(Settings(llm_enabled=False))
 OUT = ROOT / "evaluation" / "results"
+
+
+# Synthetic merchants absent from the lexicon when this hold-out was frozen (2026-10-14). New lexicon
+# entries must never match them, otherwise the long-tail column would silently stop measuring
+# generalisation; `eval_categorization` checks this on every run.
+HOLDOUT_MERCHANTS = [
+    "ANNAPURNA SUPER MARKET", "BATA INDIA FOOTWEAR", "BIRYANI ZONE", "CHUMBAK DESIGN", "CITY DENTAL CLINIC",
+    "CORNER HOUSE ICE CREAMS", "DPS SCHOOL FEES", "FABINDIA OVERSEAS", "FRESH FARM VEGETABLES", "GREEN TRENDS",
+    "HOTEL ANNAPOORNA", "KARTHIK RAO", "KUMAR AUTO WORKS", "LAKSHMI DEVI HOUSEHELP", "MTR 1924",
+    "NANDINI MILK PARLOUR", "POORVIKA MOBILES", "PRIYA NAIR", "RAHUL SHARMA", "RAJU KIRANA", "RAMESH KUMAR",
+    "SAI DIAGNOSTICS", "SAPNA BOOK HOUSE", "SHRI GANESH MEDICALS", "SMAAASH ENTERTAINMENT", "SRI DURGA FUELS",
+    "SRI LAKSHMI PROVISION STORES", "STYLE UNISEX SALON", "THE BLUE DOOR CAFE", "TRUFFLES", "VIDYARTHI BHAVAN",
+    "WEWORK INDIA", "WONDERLA HOLIDAYS", "ZOSTEL HOSTELS",
+]  # fmt: skip
+
+
+def synthetic_channel(description: str, true_category: str) -> str:
+    """Payment rail implied by the generator's narration format (its ground truth)."""
+    d = description.upper()
+    if d.startswith("UPI"):
+        return "upi"
+    if d.startswith("POS "):
+        return "atm" if true_category == "cash" else "card"
+    if d.startswith("ECOM "):
+        return "card"
+    if d.startswith("NACH"):
+        return "auto_debit"
+    if d.startswith("NEFT"):
+        return "neft"
+    return "other"
 
 
 # ============================================================================ helpers
@@ -85,6 +115,10 @@ def eval_categorization(
 ) -> dict[str, Any]:
     y_true, preds, seen_flags, sources = [], defaultdict(list), [], Counter()
     rows_total = 0
+    confident_hits: list[bool] = []
+    by_source: dict[str, list[bool]] = defaultdict(list)
+    channel_hits: list[bool] = []
+    direction_hits: list[bool] = []
     llm_stats: dict[str, Any] = {}
     for ds in dsets:
         rows_total += len(ds.transactions)
@@ -103,6 +137,14 @@ def eval_categorization(
         res, st = agent.categorize(items)
         preds["3_plus_patterns (deterministic)"] += [r.category for r in res]
         sources.update(r.source for r in res)
+        for t, r in zip(ds.transactions, res, strict=True):
+            by_source[r.source].append(r.category == t.true_category)
+            if r.confidence >= 0.7:
+                confident_hits.append(r.category == t.true_category)
+            channel_hits.append(
+                detect_channel(t.description) == synthetic_channel(t.description, t.true_category)
+            )
+            direction_hits.append(direction_of(t.amount) == ("credit" if t.amount > 0 else "debit"))
         if jev_client is not None:
             res_jev, st_jev = CategorizerAgent(router=OFFLINE, jev=jev_client).categorize(items)
             preds["4_plus_jev"] += [r.category for r in res_jev]
@@ -142,6 +184,20 @@ def eval_categorization(
                 {"true": a, "pred": b, "count": c} for (a, b), c in errors.most_common(8)
             ]
     out["long_tail_share"] = round(1 - sum(seen_flags) / len(seen_flags), 4)
+    leaked = [m for m in HOLDOUT_MERCHANTS if match_merchant(normalize_text(m)) is not None]
+    out["holdout_integrity"] = {"merchants": len(HOLDOUT_MERCHANTS), "leaked_into_lexicon": leaked}
+    out["confident_labels"] = {
+        "threshold": 0.7,
+        "share": round(len(confident_hits) / len(y_true), 4),
+        "precision": round(sum(confident_hits) / len(confident_hits), 4) if confident_hits else None,
+        "note": "Labels below the threshold go to the Needs-review queue instead of being trusted silently.",
+    }
+    out["accuracy_by_source"] = {
+        k: {"transactions": len(v), "accuracy": round(sum(v) / len(v), 4)}
+        for k, v in sorted(by_source.items(), key=lambda kv: -len(kv[1]))
+    }
+    out["channel_accuracy"] = round(sum(channel_hits) / len(channel_hits), 4)
+    out["direction_accuracy"] = round(sum(direction_hits) / len(direction_hits), 4)
     out["source_mix"] = {k: round(v / sum(sources.values()), 4) for k, v in sources.most_common()}
     if llm_stats:
         out["llm"] = llm_stats
@@ -378,7 +434,7 @@ CHAT_CASES = [
     ("any advice to cut costs", ["get_recommendations"]),
     ("anything unusual in my transactions?", ["get_insights"]),
     ("did I get charged twice somewhere? duplicate?", ["get_insights"]),
-    ("hello", ["get_overview"]),
+    ("hello", []),  # greetings are answered without reading the ledger
     ("give me a summary", ["get_overview"]),
 ]
 
@@ -418,6 +474,42 @@ def eval_chat_routing() -> dict[str, Any]:
     }
 
 
+def eval_narrations() -> dict[str, Any]:
+    """Hand-labelled bank narrations in real Indian statement formats (independent of the generator)."""
+    from evaluation.narration_cases import FIRST_RUN, NARRATION_CASES
+
+    items = [CatItem(i, d, a) for i, (d, a, _, _) in enumerate(NARRATION_CASES)]
+    res, _ = CategorizerAgent(router=OFFLINE, use_jev=False).categorize(items)
+    cat_ok = [r.category == c for r, (_, _, c, _) in zip(res, NARRATION_CASES, strict=True)]
+    chan_ok = [detect_channel(d) == ch for d, _, _, ch in NARRATION_CASES]
+    confident = [ok for ok, r in zip(cat_ok, res, strict=True) if r.confidence >= 0.7]
+    return {
+        "cases": len(NARRATION_CASES),
+        "banks": ["HDFC", "ICICI", "SBI", "Axis", "Kotak"],
+        "category_accuracy": round(sum(cat_ok) / len(cat_ok), 4),
+        "channel_accuracy": round(sum(chan_ok) / len(chan_ok), 4),
+        "confident_share": round(len(confident) / len(cat_ok), 4),
+        "confident_precision": round(sum(confident) / len(confident), 4) if confident else None,
+        "first_run": FIRST_RUN,
+        "errors": [
+            {"narration": d, "expected": c, "got": r.category, "source": r.source}
+            for r, (d, _, c, _) in zip(res, NARRATION_CASES, strict=True)
+            if r.category != c
+        ],
+        "channel_errors": [
+            {"narration": d, "expected": ch, "got": detect_channel(d)}
+            for d, _, _, ch in NARRATION_CASES
+            if detect_channel(d) != ch
+        ],
+    }
+
+
+def eval_chat_qa() -> dict[str, Any]:
+    from evaluation import chat_eval
+
+    return chat_eval.run(END)
+
+
 # ============================================================================ report
 def render_markdown(r: dict[str, Any]) -> str:
     c = r["categorization"]
@@ -444,6 +536,49 @@ def render_markdown(r: dict[str, Any]) -> str:
         f"{c['baseline_majority_class']['accuracy'] * 100:.1f}% | – | – | – |",
         "",
     ]
+    if c.get("confident_labels"):
+        cl, hi = c["confident_labels"], c["holdout_integrity"]
+        lines += [
+            f"**Confident labels:** {cl['share'] * 100:.1f}% of transactions get a category with confidence "
+            f"≥ {cl['threshold']}, and **{cl['precision'] * 100:.2f}%** of those are correct. The rest are routed "
+            "to the Needs-review queue (and the advisor asks the user to confirm them) instead of being trusted silently.",
+            "",
+            f"Payment channel accuracy {c['channel_accuracy'] * 100:.1f}% · debit/credit direction "
+            f"{c['direction_accuracy'] * 100:.1f}% · hold-out integrity: {hi['merchants']} long-tail merchants, "
+            f"{len(hi['leaked_into_lexicon'])} leaked into the lexicon.",
+            "",
+            "| Label source | Transactions | Accuracy |",
+            "|---|---|---|",
+            *[
+                f"| {k} | {v['transactions']:,} | {v['accuracy'] * 100:.1f}% |"
+                for k, v in c["accuracy_by_source"].items()
+            ],
+            "",
+        ]
+    n = r.get("narrations")
+    if n:
+        fr = n["first_run"]
+        lines += [
+            "### Real-world narration benchmark",
+            "",
+            f"{n['cases']} hand-labelled narrations in {', '.join(n['banks'])} statement formats "
+            "(`evaluation/narration_cases.py`), independent of the synthetic generator.",
+            "",
+            "| Measurement | Category accuracy | Channel accuracy | Confident share | Precision when confident |",
+            "|---|---|---|---|---|",
+            f"| First run, {fr['date']} (held-out) | {fr['category_accuracy'] * 100:.1f}% | {fr['channel_accuracy'] * 100:.1f}% "
+            f"| {fr['confident_share'] * 100:.0f}% | {fr['confident_precision'] * 100:.1f}% |",
+            f"| Current (after fixing the generic bugs it exposed) | {n['category_accuracy'] * 100:.1f}% | "
+            f"{n['channel_accuracy'] * 100:.1f}% | {n['confident_share'] * 100:.0f}% | {n['confident_precision'] * 100:.1f}% |",
+            "",
+            "Remaining misses: "
+            + (
+                "; ".join(f"`{e['narration']}` → {e['got']} (expected {e['expected']})" for e in n["errors"])
+                or "none"
+            )
+            + ".",
+            "",
+        ]
     d = r["detectors"]
     lines += [
         "## 2. Pattern & anomaly detection",
@@ -502,12 +637,37 @@ def render_markdown(r: dict[str, Any]) -> str:
     ]
     ch = r["chat"]
     lines += [
-        "## 5. Conversational routing",
+        "## 5. Ask FinPilot (chat)",
         "",
-        f"{ch['cases']} labelled questions → correct tool sequence in **{ch['accuracy'] * 100:.0f}%** "
+        f"Tool routing: {ch['cases']} labelled questions → correct tool sequence in **{ch['accuracy'] * 100:.0f}%** "
         f"({ch['mode']}).",
         "",
     ]
+    qa = r.get("chat_qa")
+    if qa:
+        lines += [
+            f"**End-to-end answer accuracy: {qa['accuracy'] * 100:.1f}%** on {qa['cases']} questions — the bold "
+            f"figures in each answer must equal values computed independently from ground truth ({qa['truth']}). "
+            f"Mode: {qa['mode']}.",
+            "",
+            "| Agent that answered | Questions | Correct |",
+            "|---|---|---|",
+            *[f"| {k} | {v['cases']} | {v['accuracy'] * 100:.0f}% |" for k, v in qa["by_agent"].items()],
+            "",
+            "| Question | Expected | Answer | ✓ |",
+            "|---|---|---|---|",
+            *[
+                f"| {x['question']} | {x['expected']} | {x['got']} | {'✅' if x['ok'] else '❌'} |"
+                for x in qa["results"]
+            ],
+            "",
+        ]
+        if qa["failures"]:
+            lines += [
+                "Misses come from categorisation, not the chat: e.g. long-tail shops (Chumbak, Fabindia) stay "
+                "uncategorised without the LLM stage, so a 'shopping' list is short by those rows.",
+                "",
+            ]
     if r.get("jev"):
         from evaluation import jev_eval
 
@@ -591,6 +751,10 @@ def main() -> None:
     sim = eval_simulation(args.seeds[:2])
     print("chat routing …", flush=True)
     chat = eval_chat_routing()
+    print("narration benchmark …", flush=True)
+    narrations = eval_narrations()
+    print("chat answer accuracy …", flush=True)
+    chat_qa = eval_chat_qa()
     print("system one (jev) …", flush=True)
     from evaluation import jev_eval
 
@@ -604,6 +768,8 @@ def main() -> None:
         "forecast": fc,
         "simulation": sim,
         "chat": chat,
+        "chat_qa": chat_qa,
+        "narrations": narrations,
         "jev": jev,
         "llm_note": note,
         "runtime_seconds": round(time.perf_counter() - t0, 1),

@@ -21,8 +21,9 @@ from typing import Any
 import numpy as np
 
 from finpilot.agents.base import BaseAgent
+from finpilot.domain.money import format_money
 from finpilot.domain.recurring import RecurringCandidate, TxnLite, monthly_equivalent
-from finpilot.domain.stats import month_key, pct_change, robust_z
+from finpilot.domain.stats import add_months, month_key, pct_change, robust_z
 from finpilot.domain.taxonomy import DISCRETIONARY, NON_SPEND, is_spending_flow, label
 from finpilot.llm.grounding import check_grounding
 
@@ -98,22 +99,25 @@ class AnalysisReport:
         return d
 
 
-SYSTEM_PROMPT = """You are FinPilot's behavioral analyst. Interpret ONE user's computed ledger evidence.
-Identify the dominant spending/obligation patterns, changes supported by comparable windows, and anomalies
-that deserve investigation. Distinguish debt repayments, consumption, investments and transfers. A card
-bill reveals an obligation, not what was purchased. Amount and time alone do not prove impulse behavior.
-Respect coverage, incomplete months, classification uncertainty and missing usage evidence. If there is
-insufficient comparison history, say so rather than inventing a trend. Absence of in-bank purchases does
-not prove a membership is unused. Name the actual categories/merchants and cite the strongest evidence.
-Write 3-4 concise second-person observations; do not recommend actions or guess motives.
-Use exact figures supplied, retaining cents and assumptions. Currency: {currency}.
+SYSTEM_PROMPT = """You are FinPilot's Analyzer agent — a behavioural analyst for ONE user's bank ledger.
+You receive computed facts: 30-day income and spending, category trends against the user's own previous windows,
+top merchants, weekend share, impulse-style purchases, findings (spikes with the merchants driving them, anomalies,
+subscriptions, month-to-date pace) and data-quality notes. Write exactly 3-4 observations, second person, each one
+sentence, in this order:
+1. the dominant spending pattern (largest discretionary category or merchant, with its amount);
+2. the most important change versus the user's own history (only if a comparison window exists), naming the driver;
+3. a risk worth attention (anomaly, obligation load, or review queue), or a positive trend if there is no risk;
+4. optionally, a timing habit (weekend share or late-night purchases).
+Rules: distinguish consumption from debt repayments, investments and transfers; a card bill reveals an obligation,
+not what was bought. Amount and time alone do not prove impulse behaviour, and missing bank purchases do not prove a
+membership is unused. If history is too short for a comparison, say so instead of inventing a trend. Do not
+recommend actions or guess motives. Copy figures exactly as supplied (keep decimals) — never round or compute new
+numbers. Currency: {currency}.
 Respond with JSON only: {{"profile": ["...", "..."]}}"""
 
 
 def _fmt(amount: float, currency: str) -> str:
-    sym = {"INR": "₹", "USD": "$", "EUR": "€", "GBP": "£"}.get(currency, "")
-    digits = 2 if round(abs(amount), 2) != round(abs(amount)) else 0
-    return f"{'-' if amount < 0 else ''}{sym}{abs(amount):,.{digits}f}"
+    return format_money(amount, currency)
 
 
 class AnalyzerAgent(BaseAgent):
@@ -130,6 +134,7 @@ class AnalyzerAgent(BaseAgent):
         currency: str = "INR",
         usage_overrides: dict[str, str] | None = None,
         narrate: bool = True,
+        review_ids: set[int] | None = None,
     ) -> AnalysisReport:
         txns = [t for t in txns if as_of is None or t.date <= as_of]
         if not txns:
@@ -156,6 +161,9 @@ class AnalyzerAgent(BaseAgent):
         findings += impulse_findings
         behavior = self._behavior(txns, as_of)
         findings += self._cashflow_findings(windows, months)
+        findings += self._pace(txns, as_of, recurring_ids)
+        if review_ids:
+            findings += self._review_queue(txns, review_ids, as_of)
         recent = [t for t in txns if as_of - dt.timedelta(days=30) < t.date <= as_of]
         cash_in = round(sum(t.amount for t in recent if t.amount > 0), 2)
         cash_out = round(sum(-t.amount for t in recent if t.amount < 0), 2)
@@ -379,6 +387,14 @@ class AnalyzerAgent(BaseAgent):
             ids = [t.id for t in txns if t.category == c and t.date > as_of - dt.timedelta(days=WINDOW)]
             if change is not None and change >= 25 and delta >= material and (z >= 1.5 or len(hist) < 2):
                 count_recent = len(ids)
+                drivers = self._spike_drivers(variable, c, as_of, len(hist))
+                driver_txt = (
+                    " Biggest increases: "
+                    + ", ".join(f"{d['merchant']} (+{_fmt(d['increase'], self.currency)})" for d in drivers)
+                    + "."
+                    if drivers
+                    else ""
+                )
                 findings.append(
                     Finding(
                         "category_spike",
@@ -386,7 +402,7 @@ class AnalyzerAgent(BaseAgent):
                         f"{label(c)} is up {change:.0f}% in the last 30 days",
                         f"You spent {_fmt(recent, self.currency)} on {label(c).lower()} in the last 30 days vs a "
                         f"{_fmt(baseline, self.currency)} average over the previous {len(hist)} months "
-                        f"({count_recent} transactions).",
+                        f"({count_recent} transactions).{driver_txt}",
                         {
                             "key": c,
                             "category": c,
@@ -396,6 +412,7 @@ class AnalyzerAgent(BaseAgent):
                             "z": round(z, 2),
                             "impact": round(delta, 2),
                             "count": count_recent,
+                            "drivers": drivers,
                         },
                         ids,
                     )
@@ -419,6 +436,112 @@ class AnalyzerAgent(BaseAgent):
                 )
         trends.sort(key=lambda t: -t["last_30d"])
         return trends, findings
+
+    @staticmethod
+    def _spike_drivers(
+        variable: list[TxnLite], category: str, as_of: dt.date, n_hist: int
+    ) -> list[dict[str, Any]]:
+        """Merchants whose spend rose most in the latest window vs their own prior-window average."""
+        if n_hist < 1:
+            return []
+        recent: dict[str, float] = defaultdict(float)
+        prior: dict[str, float] = defaultdict(float)
+        start = as_of - dt.timedelta(days=WINDOW)
+        prior_start = start - dt.timedelta(days=WINDOW * n_hist)
+        for t in variable:
+            if t.category != category or not is_spending_flow(t.category, t.amount):
+                continue
+            if start < t.date <= as_of:
+                recent[t.merchant] += -t.amount
+            elif prior_start < t.date <= start:
+                prior[t.merchant] += -t.amount
+        rows = [
+            {
+                "merchant": m,
+                "recent": round(v, 2),
+                "baseline": round(prior.get(m, 0.0) / n_hist, 2),
+                "increase": round(v - prior.get(m, 0.0) / n_hist, 2),
+            }
+            for m, v in recent.items()
+        ]
+        return sorted([r for r in rows if r["increase"] > 0], key=lambda r: -r["increase"])[:2]
+
+    def _pace(self, txns: list[TxnLite], as_of: dt.date, recurring_ids: set[int]) -> list[Finding]:
+        """Month-to-date variable spending vs the same days of last month (bills excluded)."""
+        start = as_of.replace(day=1)
+        days = (as_of - start).days + 1
+        if days < 5:
+            return []  # too early in the month for a meaningful pace
+        prev_start = add_months(start, -1)
+        prev_end = prev_start + dt.timedelta(days=days - 1)
+        if prev_start < min(t.date for t in txns):
+            return []
+
+        def spend(a: dt.date, b: dt.date) -> tuple[float, list[int]]:
+            rows = [
+                t
+                for t in txns
+                if a <= t.date <= b
+                and t.id not in recurring_ids
+                and t.id not in self._one_offs
+                and is_spending_flow(t.category, t.amount)
+                and t.category not in ("rent", "loans", "credit_card_payment", "insurance")
+            ]
+            return round(sum(-t.amount for t in rows), 2), [t.id for t in rows]
+
+        now, ids = spend(start, as_of)
+        before, _ = spend(prev_start, prev_end)
+        if before <= 0:
+            return []
+        change = round((now - before) / before * 100, 1)
+        if abs(change) < 15 or abs(now - before) < 1000:
+            return []
+        return [
+            Finding(
+                "spending_pace",
+                "warning" if change > 0 else "positive",
+                f"Day-to-day spending is {'up' if change > 0 else 'down'} {abs(change):.0f}% vs the same point last month",
+                f"{_fmt(now, self.currency)} in the first {days} days of {start:%B} vs {_fmt(before, self.currency)} "
+                f"in the first {days} days of {prev_start:%B} (bills, EMIs and one-off anomalies excluded).",
+                {
+                    "key": "pace",
+                    "month_to_date": now,
+                    "same_point_last_month": before,
+                    "change_pct": change,
+                    "days": days,
+                    "impact": round(max(0.0, now - before), 2),
+                },
+                ids,
+            )
+        ]
+
+    def _review_queue(self, txns: list[TxnLite], review_ids: set[int], as_of: dt.date) -> list[Finding]:
+        """Uncertain categories reduce every downstream number; surface them for confirmation."""
+        rows = [t for t in txns if t.id in review_ids]
+        if not rows:
+            return []
+        outflow = round(sum(-t.amount for t in rows if t.amount < 0), 2)
+        total_out = sum(-t.amount for t in txns if t.amount < 0) or 1.0
+        share = round(outflow / total_out * 100, 1)
+        merchants = Counter(t.merchant for t in rows).most_common(5)
+        return [
+            Finding(
+                "review_queue",
+                "warning" if share >= 5 else "info",
+                f"{len(rows)} transactions need a category check",
+                f"{len(rows)} transactions ({_fmt(outflow, self.currency)} out, {share}% of recorded outflows) "
+                f"have an uncertain category — mostly {', '.join(m for m, _ in merchants)}. Confirming them makes "
+                "totals, trends and forecasts exact, and FinPilot remembers your answer for future imports.",
+                {
+                    "key": "review",
+                    "count": len(rows),
+                    "outflow": outflow,
+                    "share_pct": share,
+                    "merchants": [{"merchant": m, "count": n} for m, n in merchants],
+                },
+                [t.id for t in rows][:200],
+            )
+        ]
 
     # ------------------------------------------------------------------ anomalies
     def _anomalies(

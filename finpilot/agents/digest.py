@@ -6,20 +6,21 @@ import html
 from typing import Any
 
 from finpilot.agents.base import BaseAgent
+from finpilot.domain.money import format_money
 from finpilot.llm.grounding import check_grounding
 
 SYSTEM_PROMPT = """You are the Digest agent of FinPilot. Write the opening of a short weekly money email to ONE user.
-You get their single most important insight, the single action we recommend, and a few numbers.
-Write 2 sentences: a warm, specific opener that states the insight, then why the action matters now.
-Preserve missing-data caveats and conditional savings. Cash-flow changes are not balances.
-Do not say all steady or no action needed simply because no supported recommendation was found.
-Use only numbers from the input. No greetings like "Dear user", no sign-off. Currency: {currency}.
-Respond with JSON only: {{"intro": "...", "subject": "<max 60 chars, specific>"}}"""
+You get their single most important insight, the single action we recommend, and a few outlook numbers.
+Write exactly 2 sentences: (1) a warm, specific opener that states the insight with its key figure; (2) why the
+action matters now and what it changes. Preserve missing-data caveats and conditional savings; net cash-flow changes
+are not balances. Never say "all steady" or "no action needed" just because no recommendation was found.
+Copy figures exactly as given (keep decimals); never round or invent numbers. No "Dear user", no sign-off.
+Also write an email subject (max 60 characters) naming the specific merchant, category or goal. Currency: {currency}.
+Respond with JSON only: {{"intro": "...", "subject": "..."}}"""
 
 
 def _money(x: float, currency: str) -> str:
-    sym = {"INR": "₹", "USD": "$", "EUR": "€", "GBP": "£"}.get(currency, "")
-    return f"{'-' if x < 0 else ''}{sym}{abs(x):,.0f}"
+    return format_money(x, currency, 0)
 
 
 class DigestAgent(BaseAgent):

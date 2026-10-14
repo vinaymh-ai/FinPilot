@@ -6,8 +6,11 @@
                                                    │
                                      forecast ← ───┘
                                         │
-                                      advise ─┬─(scheduled digest)→ digest → END
-                                              └────────────────────────────→ END
+                                      advise → audit ─┬─(scheduled digest)→ digest → END
+                                                      └────────────────────────────→ END
+
+The plan step records *why* each specialist runs; the auditor independently verifies every
+recommendation's trigger, evidence and figures against what the other agents produced.
 
 Every node is wrapped so that it records an `AgentStep` (timing, summary, details, LLM calls,
 errors) under one `AgentRun` — the run is the root of the decision trail. A failing non-critical
@@ -31,6 +34,7 @@ from sqlalchemy.orm import Session
 
 from finpilot.agents.advisor import AdvisorAgent
 from finpilot.agents.analyzer import AnalysisReport, AnalyzerAgent
+from finpilot.agents.auditor import AuditorAgent
 from finpilot.agents.categorizer import CategorizerAgent, CatItem
 from finpilot.agents.digest import DigestAgent
 from finpilot.agents.forecaster import ForecasterAgent
@@ -70,6 +74,7 @@ class PipelineState(TypedDict, total=False):
     analysis: AnalysisReport
     forecast: dict[str, Any]
     advice: dict[str, Any]
+    audit: dict[str, Any]
     digest_id: int
     errors: list[str]
     abort: bool
@@ -87,6 +92,7 @@ class Coordinator:
         "analyzer": AnalyzerAgent,
         "forecaster": ForecasterAgent,
         "advisor": AdvisorAgent,
+        "auditor": AuditorAgent,
         "digest": DigestAgent,
     }
 
@@ -176,6 +182,7 @@ class Coordinator:
         g.add_node("analyze", self._wrap(session, "analyzer", "analyze", self._analyze))
         g.add_node("forecast", self._wrap(session, "forecaster", "forecast", self._forecast))
         g.add_node("advise", self._wrap(session, "advisor", "advise", self._advise))
+        g.add_node("audit", self._wrap(session, "auditor", "audit", self._audit))
         g.add_node("digest", self._wrap(session, "digest", "digest", self._digest))
         g.add_edge(START, "plan")
         g.add_conditional_edges(
@@ -196,8 +203,9 @@ class Coordinator:
             lambda s: "end" if s.get("abort") else "advise",
             {"advise": "advise", "end": END},
         )
+        g.add_edge("advise", "audit")
         g.add_conditional_edges(
-            "advise",
+            "audit",
             lambda s: "digest" if s.get("deliver_digest") else "end",
             {"digest": "digest", "end": END},
         )
@@ -280,6 +288,8 @@ class Coordinator:
             return t.category_source == "review" or (
                 t.category != "other" and not (t.category_reason or "").startswith("Explicit purpose:")
             )
+        if t.category_source in {"review", "fallback"} and looks_like_person(t.description):
+            return True  # person-to-person rows labelled by older rules get the P2P transfer label
         return (
             t.category == "transfers" and looks_like_person(t.description) and t.category_source == "keyword"
         )
@@ -295,9 +305,28 @@ class Coordinator:
             "analyze",
             "forecast",
             "advise",
+            "audit",
         ]
         if state.get("deliver_digest"):
             plan.append("digest")
+        review = sum(
+            1
+            for t in rows
+            if t.category_source not in ("user", "import")
+            and (t.category in (None, "other") or (t.category_confidence or 0) < 0.7)
+        )
+        reasons = {
+            "categorize": (
+                "re-categorise every automatic label on request"
+                if state.get("recategorize")
+                else f"{unc} transaction(s) are new or need re-classification"
+            ),
+            "analyze": "refresh trends, anomalies, subscriptions and pace from the full ledger",
+            "forecast": "project the balance and goal odds from the refreshed patterns",
+            "advise": "turn findings and the forecast into ranked, evidenced actions",
+            "audit": "verify each recommendation's trigger, evidence and figures",
+            "digest": "scheduled delivery: one key insight and one action",
+        }
         llm = (
             self.router.describe("advisor")
             if self.use_llm and self.router.available("advisor")
@@ -313,7 +342,19 @@ class Coordinator:
             },
             f"{n} transactions ({unc} uncategorised) → plan: {' → '.join(plan)} "
             f"[decisions: {jev}; LLM: {llm}]",
-            {"plan": plan, "transactions": n, "uncategorized": unc, "llm": llm, "decisions": jev},
+            {
+                "plan": plan,
+                "why": {step: reasons[step] for step in plan},
+                "transactions": n,
+                "uncategorized": unc,
+                "needs_review": review,
+                "llm": llm,
+                "decisions": jev,
+                "models": {
+                    a: (self.router.describe(a) if self.use_llm and self.router.available(a) else "rules")
+                    for a in ("categorizer", "analyzer", "forecaster", "advisor", "digest")
+                },
+            },
         )
 
     @staticmethod
@@ -373,8 +414,14 @@ class Coordinator:
         series = detect_recurring(lite, as_of)
         usage = repo.save_recurring(session, uid, series)
         series = repo.recurring_candidates(session, uid)  # re-read: honours user flags (cancelled, usage)
+        review_ids = {
+            t.id
+            for t in rows
+            if t.category_source not in ("user", "import")
+            and (t.category in (None, "other") or (t.category_confidence or 0) < 0.7)
+        }
         report = self._agent("analyzer").analyze(
-            lite, series, as_of=as_of, currency=user.currency, usage_overrides=usage
+            lite, series, as_of=as_of, currency=user.currency, usage_overrides=usage, review_ids=review_ids
         )
         # persist: anomalies & impulse tags on transactions, findings as insights
         session.execute(
@@ -547,6 +594,63 @@ class Coordinator:
             },
         )
 
+    def _audit(self, session: Session, state: PipelineState):
+        uid = state["user_id"]
+        report: AnalysisReport = state["analysis"]
+        rows = list(
+            session.scalars(
+                select(Recommendation)
+                .where(Recommendation.run_id == state["run_id"])
+                .order_by(Recommendation.priority.desc())
+            )
+        )
+        ledger = repo.load_transactions(session, uid)
+        outflow = sum(-float(t.amount) for t in ledger if t.amount < 0) or 1.0
+        uncertain = sum(
+            -float(t.amount)
+            for t in ledger
+            if t.amount < 0
+            and t.category_source not in ("user", "import")
+            and (t.category in (None, "other") or (t.category_confidence or 0) < 0.7)
+        )
+        recs = [
+            {
+                "title": r.title,
+                "message": r.message,
+                "trigger": r.trigger,
+                "evidence": r.evidence,
+                "reasoning": r.reasoning,
+                "monthly_impact": float(r.monthly_impact or 0),
+                "one_time_impact": (r.evidence or {}).get("one_time_impact"),
+                "confidence": (r.evidence or {}).get("confidence"),
+            }
+            for r in rows
+        ]
+        result = self._agent("auditor").audit(
+            recs,
+            finding_kinds={f.kind for f in report.findings},
+            has_forecast=bool(state.get("forecast")),
+            ledger_ids={t.id for t in ledger},
+            review_outflow_share=uncertain / outflow * 100,
+        )
+        for row, verdict in zip(rows, result["results"], strict=True):
+            note = (
+                "Audit passed: " + "; ".join(verdict["checks"])
+                if verdict["passed"]
+                else "Audit flagged: " + "; ".join(verdict["issues"])
+            )
+            row.reasoning = [*(row.reasoning or []), note]
+            if not verdict["passed"]:
+                row.grounded = False
+        session.commit()
+        summary = f"Audited {result['checked']} recommendations: {result['passed']} passed, {result['failed']} flagged"
+        if "categorization_health" in result:
+            summary += (
+                f"; categorization health {result['categorization_health']} "
+                f"({result['categorization_review_share_pct']}% of outflows need review)"
+            )
+        return {"audit": result}, summary, result
+
     def _digest(self, session: Session, state: PipelineState):
         uid = state["user_id"]
         user = repo.get_or_create_user(session, uid)
@@ -606,6 +710,12 @@ class Coordinator:
                 "findings": len(a.findings) if a else 0,
                 "anomalies": len(a.anomalies) if a else 0,
                 "recommendations": len(adv.get("recommendations", [])),
+                "audit": {
+                    k: (state.get("audit") or {}).get(k)
+                    for k in ("checked", "passed", "failed", "categorization_health")
+                }
+                if state.get("audit")
+                else None,
                 "headline": adv.get("headline"),
                 "low_point": f.get("low_point"),
                 "digest_id": state.get("digest_id"),

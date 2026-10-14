@@ -11,8 +11,15 @@ quantified, *auditable* recommendations. A background scheduler delivers a weekl
 **Every AI call routes through [Mesh API](https://developers.meshapi.ai)** (`https://api.meshapi.ai/v1`) by
 default — and the system still runs end-to-end with **zero LLM spend** (each agent has a deterministic path).
 
-**API agents with verified evidence.** Separate categorizer, analyzer, forecaster, advisor, chat planner
-and digest prompts reason over real transaction evidence. Exact tools compute money; independent API
+**Ask anything about your transactions.** *Ask FinPilot* is its own team of agents — guardrails, a retriever
+(value linking + knowledge RAG), a **sandboxed per-user SQL Analyst**, a planner over the finance tools, and a
+composer + verifier — so "how many transactions did I make?", "show all my shopping transactions", "UPI vs
+card spending", "biggest credit this year" or "food delivery this month vs last month" get exact answers with
+the full table attached. Measured: **96.4% end-to-end answer accuracy** against ground truth, and every
+transaction carries its **debit/credit direction and payment channel** (UPI, card, NEFT, ATM, auto-debit…).
+
+**API agents with verified evidence.** Separate categorizer, analyzer, forecaster, advisor, auditor, chat
+planner, SQL analyst and digest prompts reason over real transaction evidence. Exact tools compute money; independent API
 checks reject unsupported generated claims. Missing balances limit affordability conclusions while
 cash-flow projections and transaction-based advice continue. **Jev is disabled by default**; its optional
 legacy integration remains documented below. See the current [agent design](docs/API_AGENTS.md).
@@ -22,8 +29,10 @@ legacy integration remains documented below. See the current [agent design](docs
 | What-if Lab | Decision trail ("Why?") |
 |---|---|
 | ![What-if](docs/screenshots/what-if-lab.png) | ![Decision trail](docs/screenshots/decision-trail.png) |
-| **Agents & run trail** | **Ask FinPilot (tool-calling chat)** |
+| **Agents: analysis pipeline + chat team** | **Ask FinPilot: SQL Analyst answer with the full table** |
 | ![Agents](docs/screenshots/agents.png) | ![Chat](docs/screenshots/chat.png) |
+| **Transactions: debit/credit, channel, category evidence** | **Self-evaluation** |
+| ![Transactions](docs/screenshots/transactions.png) | ![Evaluation](docs/screenshots/evaluation.png) |
 
 ---
 
@@ -59,7 +68,8 @@ generated relative to *today*, so exact numbers shift):
 | **What-if** | *"Can I afford a ₹45k trip next month?"* → **A stretch**: pushes the emergency fund back ~6 weeks; *"cut food delivery ₹10.2k→₹5.2k, dining ₹3.4k→₹1.7k … for 6 months to fund it"* (or *"wait until <date>"* when that works). |
 | **Advice** | Ranked, quantified actions: cancel Zomato Gold (₹349/mo), keep Netflix & drop Prime Video + Hotstar (₹598/mo), cap food delivery at your usual ₹8.7k (₹4.1k/mo), dispute the duplicate charge, autopay to stop late fees — and an emergency-fund plan built from those levers. |
 | **Proactive** | APScheduler cron → weekly digest (in-app inbox, email via SMTP, Telegram bot) with **one key insight + one action**. |
-| **Conversational** | "How much did I spend on food delivery last month?" · "Am I on track?" · "Can I afford a ₹1.2L bike in December?" — answered through tool calls over real data, with the tool trace shown. |
+| **Conversational** | Any question about your own transactions — "How many transactions did I make last month?", "Show all my shopping transactions", "Average Swiggy order", "Spending by category this year", "UPI vs card", "Food delivery this month vs last month" — answered by a sandboxed SQL Analyst with the exact table/chart attached; plus "Am I on track?", "Can I afford a ₹1.2L bike in December?" through the finance tools. Every answer shows which agents and queries produced it. |
+| **Trust** | Every transaction stores direction (debit/credit), payment channel, category source, confidence and reason. An **Auditor** agent re-checks every recommendation's trigger, evidence transactions and figures before you see it. |
 
 ---
 
@@ -158,8 +168,9 @@ graph LR
     categorize --> analyze
     analyze -- critical failure --> E
     analyze --> forecast --> advise
-    advise -- scheduled run --> digest --> E
-    advise --> E
+    advise --> audit
+    audit -- scheduled run --> digest --> E
+    audit --> E
 ```
 
 | Agent | Its job | Own prompt / tools | Deterministic path | Where the LLM adds value |
@@ -169,7 +180,8 @@ graph LR
 | **Analyzer** | Behaviour over time; patterns & anomalies | Behaviour-profile prompt | rolling 30-day windows vs previous three (z-scores), median/MAD outliers, duplicate/fee/new-payee detection, recurring-series detection, subscription overlap & **usage evidence**, impulse tagging | 3–4 bullet behaviour profile (grounding-checked) |
 | **Forecaster** | Project the trajectory; simulate decisions | Forecast-narrative prompt | Monte-Carlo engine (below), goal funding, what-if, "wait until"/"cut" suggestions | Plain-language explanation (grounding-checked) |
 | **Advisor** | Turn signals into specific, ranked actions | Advisor prompt (rewrite, never invent numbers) | 11 candidate generators, priority scoring, feedback adaptation, goal-progress adaptation | Friendlier phrasing + weekly headline, rejected if any figure isn't in the evidence |
-| **Chat** | Free-form money questions | Jev router + financial tools (`simulate`, `get_spending`, `get_forecast`, …) | Exact retrieval and calculations, plus templates on model failure | Conversational greetings; LLM-written answers from exact evidence; complex questions use a tool loop; numeric and claim checks reject unsupported details |
+| **Auditor** | Verify the decision trail | Own checks over this run's findings, forecast and ledger | always (no LLM needed) | — (deliberately independent of the models it audits) |
+| **Chat team** | Free-form money questions | Guardrails · Retriever · Planner (`query_ledger`, `get_spending`, `simulate`, …) · SQL Analyst · Composer/Verifier — see [§3a](#3a-ask-finpilot--the-chat-team) | Deterministic question parser → SQL, finance tools, templates | Planning, text-to-SQL with self-repair, natural answers; numeric and claim checks reject unsupported details |
 | **Digest** | Weekly proactive message: one insight + one action | Digest prompt | Template composer | Warm, specific opener (grounding-checked) |
 
 **One run, step by step (demo account):**
@@ -181,6 +193,37 @@ graph LR
 4. `forecast` — 400 paths × 185 days in ~50 ms; goal snapshots appended (used next run to adapt advice).
 5. `advise` — 9 candidates → 8 ranked recommendations, each with trigger + evidence + reasoning.
 6. `digest` (scheduled runs) — composed and delivered; per-channel delivery status stored.
+
+---
+
+## 3a. Ask FinPilot — the chat team
+
+```mermaid
+graph LR
+    Q([question]) --> G{guardrails}
+    G -- action / injection / off-topic --> R([refusal])
+    G -- greeting / help --> C([capabilities from your data])
+    G --> RET[Retriever: merchants, categories, insights]
+    RET --> P{understood exactly?}
+    P -- yes --> SQL[SQL Analyst: compiled query]
+    P -- no --> PL[Planner LLM]
+    PL --> T[finance tools: spending, forecast, simulate, goals, advice]
+    PL --> SQL2[SQL Analyst: LLM text-to-SQL + repair]
+    SQL --> A([answer + table/chart])
+    SQL2 --> CV[Composer + Verifier] --> A
+    T --> CV
+```
+
+| Agent | Job | How it stays accurate |
+|---|---|---|
+| **Guardrails** | Refuse money-moving actions, prompt injection, off-topic chat | Runs before any model sees the message |
+| **Retriever (RAG)** | Link words to *your* merchants and categories ("swigy" → Swiggy, "medicines" → Health & Fitness, "card bill" → card repayments); pull relevant insights, recommendations and goals | Local BM25 + fuzzy matching over your ledger — works offline, reproducible |
+| **SQL Analyst** | Any factual question: counts, lists, averages, max/min/first/last, breakdowns by month/category/merchant/weekday/channel, credits & income, period comparisons, weekend/late-night, amount thresholds | Runs in a **per-request in-memory SQLite that contains only your rows** (authorizer allows SELECT only, no PRAGMA/ATTACH, CPU/size limits). A deterministic parser compiles fully understood questions; anything else goes to LLM text-to-SQL with schema, date anchors and retrieved values, repaired from the database error up to twice. Unknown payees give "no matches", never a grand total |
+| **Planner** | Pick the specialist tools for everything else (`get_spending`, `rank_spending`, `simulate`, `get_forecast`, `get_goals`, `get_recommendations`, `get_insights`, `query_ledger`) | Only payees that appear in the question or in your data are accepted |
+| **Composer + Verifier** | Phrase the answer from verified results | Numeric grounding + an independent claim check; on rejection the exact deterministic answer is shown |
+
+Results come back as text **plus artifacts**: the full table of matching rows (CSV export) and a chart for
+time series — so "give me the transactions related to shopping" shows all of them, not the first ten.
 
 ---
 
@@ -272,14 +315,27 @@ LLM telemetry (tokens, latency, cache hits) and all-time usage.
 city suffixes) and **21.8% of rows come from long-tail local merchants that are not in the lexicon**
 ("TRUFFLES", "MTR 1924", "GREEN TRENDS", "SHRI GANESH MEDICALS"…). Anomalies and behaviour shifts are injected.
 
-**Categorisation (ablation):**
+**Categorisation (ablation, deterministic):**
 
 | Pipeline stage | Accuracy | Macro-F1 | Long-tail merchants |
 |---|---|---|---|
 | Baseline: always the most common category | 20.0% | – | – |
 | Merchant lexicon only | 79.0% | 0.827 | 3.8% |
-| + keyword evidence, P2P & amount-aware rules | **93.4%** | **0.903** | **69.7%** |
+| + keyword phrases, P2P detection & amount-aware rules | **96.3%** | **0.940** | **83.2%** |
 | + LLM for uncertain merchants (`--llm`) | run with `MESH_API_KEY` | | |
+
+**Precision when confident:** 91.3% of transactions are labelled with confidence ≥ 0.7 and **99.73%** of those
+are correct; the rest go to the *Needs review* queue, and the advisor asks you to confirm them (each answer
+becomes merchant memory). Payment channel 99.8% · debit/credit 100%. The 34 long-tail merchants are a frozen
+hold-out: the evaluation fails loudly if any of them ever leaks into the lexicon.
+
+**Real bank narrations** (`evaluation/narration_cases.py`, 100 hand-labelled HDFC/ICICI/SBI/Axis/Kotak
+formats, independent of the generator): first held-out run **91.0%** category / 97.0% channel / 98.8% precision
+when confident; after fixing the generic parsing bugs it exposed, 98.0% / 99.0% / 100%.
+
+**Ask FinPilot end-to-end:** **96.4%** of 28 questions answered with exactly the right figures, where the
+expected values are computed from the generator's ground-truth categories, merchants and times (the one miss
+is a long-tail shop the deterministic categorizer leaves for review). Tool routing: 20/20.
 
 **Detectors:**
 
@@ -300,7 +356,7 @@ cash-flow| as % of monthly income:
 
 30-day error by persona: family 13.5%, young professional 15.5%, **freelancer 57.7%** (irregular income is the hard
 case). **What-if consistency:** 36/36 scenarios have an exact purchase delta; verdicts are monotonic in purchase
-size on 6/6 datasets. **Chat routing:** 20/20 labelled questions call the right tool sequence (LLM-free router).
+size on 6/6 datasets.
 
 **Caveats, honestly:** data is synthetic; accuracy on *known* merchants (100%) mostly tests normalisation of
 noisy descriptions because the labels share the lexicon's knowledge — the long-tail column is the real
@@ -413,7 +469,8 @@ Interactive docs at **`/docs`**. Highlights:
 | `POST /api/simulate` | what-if with any combination of adjustments |
 | `GET/PATCH /api/recommendations[/{id}]` | advice + feedback (accepted / done / dismissed) |
 | `GET/POST/PATCH/DELETE /api/goals` | goals with live projections and history |
-| `POST /api/chat` | tool-calling assistant (returns the tool trace) |
+| `POST /api/chat` | multi-agent assistant: answer + tool/SQL trace + table/chart `artifacts` + agent `pipeline` |
+| `GET /api/transactions?direction=debit\|credit&channel=upi` | filter by money in/out and payment rail; response includes debit/credit totals |
 | `GET /api/digests` · `POST /api/digests/send-now` · `PUT /api/scheduler` | proactive delivery |
 | `GET/PUT /api/settings…` · `GET /api/llm/models` · `POST /api/settings/llm/test` | profile & provider routing |
 | `GET /api/decisions` · `GET /api/decisions/stats` | System One decision log (probabilities, action taken) + spend & savings by kind |
@@ -424,17 +481,19 @@ Interactive docs at **`/docs`**. Highlights:
 
 ```
 finpilot/
-  agents/       coordinator (LangGraph) · categorizer · analyzer · forecaster · advisor · chat · digest
+  agents/       coordinator (LangGraph) · categorizer · analyzer · forecaster · advisor · auditor · digest
+                chat (guardrails, planner, composer/verifier) · analyst (SQL Analyst: parser + text-to-SQL)
   domain/       taxonomy · merchant lexicon · description normaliser · recurring detection · stats
   decisions/    Jev client (Mesh /v1/evaluate) · question specs · confidence policy · faithfulness guard · cost model
   llm/          provider registry · router (fallback, cache, telemetry) · grounding check
   observability/ request context · access-log middleware · raw call recorder · LangSmith tracing
   services/     statements/ (format readers, column mapping, PDF text parser) · ingestion · auth · synthetic data
+                ledger_sql (sandboxed per-user SQL view) · retrieval (value linking + BM25 knowledge)
                 repository · toolkit (chat tools) · scheduler (+ retention) · notifier · seed
   api/          FastAPI routers + serializers        main.py · models.py · config.py · db.py
 evaluation/     run_eval.py · jev_eval.py + jev_cases.py (labelled sets) · results/ (REPORT.md, latest.json)
 frontend/       React 19 + Vite + TypeScript + Tailwind 4 + Recharts + TanStack Query
-tests/          128 tests: domain logic, agents (fake LLM + simulated /v1/evaluate), Jev, statement formats, accounts
+tests/          256 tests: domain logic, agents (fake LLM + simulated /v1/evaluate), Jev, statement formats, accounts
                 & isolation, observability, API
 ```
 
@@ -464,6 +523,9 @@ Upload what your bank gives you; FinPilot works out the layout instead of expect
 * **Values:** one date format per column (so 05/07 is never read two ways), `1,23,456.78`, `500 Cr`, `(250)`,
   `250-`, `₹`, `Rs.`, `/-`; remarks wrapped over several lines are joined.
 * **Signs** come from separate debit/credit columns, a type column, Cr/Dr suffixes, or the running balance.
+  Every stored transaction then records its **direction** (debit/credit) and **payment channel** (UPI, card,
+  net banking, NEFT, IMPS, RTGS, ATM, auto-debit, cheque, cash deposit, bank interest/charges) read from the
+  narration; both are filters on the Transactions page and columns in the chat's SQL view.
 * **Checks:** every import reports the date range, money in and out, and how many rows reconcile against the
   statement's own running balance (100% for the ICICI CSV that previously failed). Re-uploading the same file
   imports nothing twice.

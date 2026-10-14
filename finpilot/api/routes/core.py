@@ -32,40 +32,85 @@ AGENT_CARDS = [
     {
         "id": "coordinator",
         "name": "Coordinator",
-        "role": "LangGraph state machine: plans the run and routes work "
-        "between specialists; records every step",
+        "group": "pipeline",
+        "role": "LangGraph state machine: plans the run with a reason for every step, routes work between "
+        "specialists, stops dependent work on critical failures and records every step",
     },
     {
         "id": "categorizer",
         "name": "Categorizer",
-        "role": "API reasoning separates payee business from transaction purpose; preserves user corrections, "
-        "reviews uncertain intermediary payments and records category evidence",
+        "group": "pipeline",
+        "role": "Memory → lexicon → keyword phrases → person-to-person detection → one LLM decision per uncertain "
+        "merchant → merchant consistency. Every label keeps its source, confidence and reason; debit/credit "
+        "direction and payment channel are recorded for each transaction",
     },
     {
         "id": "analyzer",
         "name": "Analyzer",
-        "role": "Rolling-window trends, robust anomaly detection, subscription "
-        "inventory & usage, impulse buys, behaviour profile",
+        "group": "pipeline",
+        "role": "Rolling-window trends with the merchants driving each spike, month-to-date pace, robust "
+        "anomaly detection, subscription inventory & usage, impulse buys, review queue, behaviour profile",
     },
     {
         "id": "forecaster",
         "name": "Forecaster",
-        "role": "Monte-Carlo cash-flow projection, goal probabilities (spend vs reserve goals typed "
-        "through API reasoning) and what-if simulation on common random numbers",
+        "group": "pipeline",
+        "role": "Monte-Carlo cash-flow projection, goal probabilities (spend vs reserve goals) and what-if "
+        "simulation on common random numbers",
     },
     {
         "id": "advisor",
         "name": "Advisor",
-        "role": "Reasons over patterns, obligations, forecasts and goals to prioritize evidenced actions; "
-        "numbers and claims are independently checked through the API",
+        "group": "pipeline",
+        "role": "Reasons over patterns, obligations, forecasts and goals to prioritise evidenced actions; "
+        "adapts to your feedback and goal progress",
+    },
+    {
+        "id": "auditor",
+        "name": "Auditor",
+        "group": "pipeline",
+        "model_agent": None,
+        "role": "Independently verifies every recommendation: trigger matches a finding of this run, evidence "
+        "transactions exist, figures are grounded, reasoning is complete; reports categorization health",
+    },
+    {
+        "id": "digest",
+        "name": "Digest",
+        "group": "pipeline",
+        "role": "Scheduled weekly digest (APScheduler): one key insight + one action, by email / Telegram / in-app",
+    },
+    {
+        "id": "chat_planner",
+        "name": "Chat planner",
+        "group": "chat",
+        "model_agent": "chat",
+        "role": "Guardrails, then routes each question to the right specialist tools (spending, forecast, "
+        "simulation, goals, advice) or the SQL Analyst; resolves follow-ups from history",
+    },
+    {
+        "id": "retriever",
+        "name": "Retriever (RAG)",
+        "group": "chat",
+        "model_agent": None,
+        "model_label": "local BM25 + fuzzy",
+        "role": "Links your words to merchants and categories that exist in your data (typos included) and "
+        "retrieves relevant insights, recommendations and goals",
+    },
+    {
+        "id": "sql_analyst",
+        "name": "SQL Analyst",
+        "group": "chat",
+        "model_agent": "chat",
+        "role": "Answers any transaction question — counts, lists, averages, breakdowns, credits, comparisons — "
+        "over a sandboxed per-user SQL view; deterministic when certain, LLM text-to-SQL with self-repair otherwise",
     },
     {
         "id": "chat",
-        "name": "Chat",
-        "role": "API query planning selects exact financial tools; API generation explains verified "
-        "transaction facts, rankings, comparisons and simulations",
+        "name": "Composer & verifier",
+        "group": "chat",
+        "role": "Writes the answer from verified results; numeric grounding and an independent claim check "
+        "reject anything the evidence does not support",
     },
-    {"id": "digest", "name": "Digest", "role": "Scheduled weekly digest: one key insight + one action"},
 ]
 
 
@@ -89,8 +134,15 @@ def meta(uid: int = Depends(current_user_id), db: Session = Depends(get_db)) -> 
     r = get_router()
     cards = []
     for c in AGENT_CARDS:
-        model = r.describe(c["id"]) if c["id"] in AGENTS and r.available(c["id"]) else "rules"
-        cards.append({**c, "model": model if c["id"] != "coordinator" else "langgraph"})
+        agent = c.get("model_agent", c["id"])
+        model = r.describe(agent) if agent in AGENTS and r.available(agent) else "rules"
+        if c["id"] == "coordinator":
+            model = "langgraph"
+        elif c.get("model_label"):
+            model = c["model_label"]
+        cards.append(
+            {k: v for k, v in c.items() if k not in ("model_agent", "model_label")} | {"model": model}
+        )
     return {
         "version": __version__,
         "currency": user.currency,

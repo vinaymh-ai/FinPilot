@@ -110,6 +110,14 @@ MERCHANT_RULES: list[MerchantRule] = [
     R(r"STAR BAZAAR", "Star Bazaar", "groceries"),
     R(r"DUNZO", "Dunzo", "groceries"),
     R(r"COUNTRY ?DELIGHT|MILK ?BASKET", "Country Delight", "groceries"),
+    R(r"AMAZON ?FRESH|FLIPKART ?MINUTES|FLIPKART ?QUICK", "Quick commerce", "groceries"),
+    R(
+        r"RATNADEEP|SPAR ?HYPERMARKET|METRO ?CASH|VISHAL ?MEGA ?MART|SMART ?BAZAAR|EASYDAY",
+        "Supermarket",
+        "groceries",
+    ),
+    R(r"LICIOUS|FRESH ?TO ?HOME|FRESHTOHOME|ZAPPFRESH|MEATIGO", "Meat & fish", "groceries"),
+    R(r"OTIPY|KPN ?FARM ?FRESH|MILKY ?MIST|AKSHAYAKALPA", "Fresh produce & dairy", "groceries"),
     R(
         r"WHOLE ?FOODS|TRADER ?JOE|KROGER|SAFEWAY|ALDI|LIDL|TESCO|SAINSBURY|COSTCO",
         "Supermarket",
@@ -133,6 +141,23 @@ MERCHANT_RULES: list[MerchantRule] = [
     R(r"CHAAYOS|CHAI ?POINT|THIRD ?WAVE ?COFFEE|BLUE ?TOKAI", "Café", "dining"),
     R(r"HALDIRAM", "Haldiram's", "dining"),
     R(r"BARBEQUE ?NATION|TOIT ?BREW|MAINLAND ?CHINA", "Restaurant", "dining"),
+    R(
+        r"ADYAR ?ANANDA ?BHAVAN|A2B|SARAVANA ?BHAVAN|MEGHANA ?FOODS|PARADISE ?BIRYANI|BEHROUZ ?BIRYANI|"
+        r"BIKANERVALA|SAGAR ?RATNA|NANDHANA|EMPIRE ?RESTAURANT|RAMESHWARAM ?CAFE|BRAHMIN ?S ?COFFEE|"
+        r"SOCIAL ?OFFLINE|HARD ?ROCK ?CAFE|BEER ?CAFE|ONESTA|LA ?PINO ?Z|LAPINOZ|NANDOS|NANDO ?S",
+        "Restaurant",
+        "dining",
+    ),
+    R(
+        r"WOW ?MOMO|BURGER ?SINGH|TACO ?BELL|WENDY ?S|POPEYES|CHAI ?SUTTA ?BAR|CHAI ?KINGS",
+        "Quick-service restaurant",
+        "dining",
+    ),
+    R(
+        r"BASKIN ?ROBBINS|NATURALS ?ICE ?CREAM|KRISPY ?KREME|DUNKIN|THEOBROMA|BARISTA|COSTA ?COFFEE|AMUL ?PARLOUR",
+        "Dessert & coffee",
+        "dining",
+    ),
     # ---- Transport ----------------------------------------------------------------------------
     R(r"UBER|UBER ?INDIA|UBER ?TRIP", "Uber", "transport"),
     R(r"OLA ?CABS|ANI TECHNOLOGIES|OLACABS|OLA", "Ola", "transport"),
@@ -145,6 +170,7 @@ MERCHANT_RULES: list[MerchantRule] = [
         "transport",
     ),
     R(r"FASTAG|NETC|TOLL ?PLAZA", "FASTag toll", "transport"),
+    R(r"PARK ?\+|PARKPLUS|PARK ?PLUS|CHALO ?APP|ZOOMCAR|REVV|BOUNCE ?INFINITY|VOGO", "Mobility", "transport"),
     # ---- Shopping -----------------------------------------------------------------------------
     R(r"AMAZON|AMZN|AMAZON ?PAY ?INDIA", "Amazon", "shopping"),
     R(r"FLIPKART", "Flipkart", "shopping"),
@@ -158,6 +184,20 @@ MERCHANT_RULES: list[MerchantRule] = [
     R(r"LIFESTYLE|WESTSIDE|PANTALOONS|SHOPPERS ?STOP|MAX ?FASHION|ZARA|UNIQLO", "Fashion store", "shopping"),
     R(r"LENSKART", "Lenskart", "shopping"),
     R(r"FIRSTCRY", "FirstCry", "shopping"),
+    R(r"NYKAA ?FASHION", "Nykaa Fashion", "shopping"),
+    R(
+        r"RELIANCE ?TRENDS|H ?M HENNES|HENNES|LEVI ?S|LEVIS|NIKE|ADIDAS|PUMA|SKECHERS|WOODLAND|MARKS ?SPENCER",
+        "Fashion store",
+        "shopping",
+    ),
+    R(r"SNAPDEAL|SHOPSY|NYKAA ?MAN|BEWAKOOF|SOULED ?STORE", "Online shopping", "shopping"),
+    R(
+        r"SAMSUNG|ONEPLUS|XIAOMI|MI ?STORE|SANGEETHA ?MOBILES|BAJAJ ?ELECTRONICS|GIRIAS|CROMA",
+        "Electronics store",
+        "shopping",
+    ),
+    R(r"WAKEFIT|SLEEPYCAT|DUROFLEX|SLEEPWELL|NILKAMAL", "Home furnishing", "shopping"),
+    R(r"TANISHQ|MALABAR ?GOLD|CARATLANE|KALYAN ?JEWELLERS|JOYALUKKAS|GIVA", "Jewellery", "shopping"),
     R(r"APPLE ?STORE|BEST ?BUY|TARGET|WALMART|EBAY|ETSY|SHEIN", "Retail store", "shopping"),
     # ---- Utilities ----------------------------------------------------------------------------
     R(r"AIRTEL|BHARTI", "Airtel", "utilities", "telecom"),
@@ -178,10 +218,20 @@ MERCHANT_RULES: list[MerchantRule] = [
         "electricity",
     ),
     R(r"BWSSB|WATER ?BOARD|JAL ?BOARD", "Water", "utilities", "water"),
+    R(
+        r"UPPCL|PSPCL|TSSPDCL|APSPDCL|APEPDCL|DHBVN|UHBVN|JVVNL|AVVNL|WBSEDCL|TORRENT ?POWER|GESCOM|HESCOM|"
+        r"MESCOM|CESCOM|MPEB|MPPKVVCL|CSPDCL|KESCO|NBPDCL|SBPDCL",
+        "Electricity",
+        "utilities",
+        "electricity",
+    ),
+    R(r"HMWSSB|DELHI ?JAL|MCGM ?WATER", "Water", "utilities", "water"),
+    R(r"GUJARAT ?GAS|TORRENT ?GAS|GAIL ?GAS|MNGL|ASSAM ?GAS", "Piped gas", "utilities", "gas"),
     R(r"INDANE|HP ?GAS|BHARAT ?GAS|MAHANAGAR ?GAS|IGL|ADANI ?GAS", "Cooking gas", "utilities", "gas"),
     R(r"COMCAST|XFINITY|VERIZON|T ?MOBILE|CON ?EDISON", "Utility", "utilities"),
     # ---- Housing ------------------------------------------------------------------------------
     R(r"NOBROKER ?HOOD|MYGATE|SOCIETY ?MAINT", "Society maintenance", "rent"),
+    R(r"NESTAWAY|ZOLO ?STAYS|STANZA ?LIVING|COLIVE|ISTHARA|HELLO ?WORLD ?COLIVING", "Co-living rent", "rent"),
     R(r"NO ?BROKER|HOUSE ?RENT|RENT ?PAYMENT|MONTHLY ?RENT|RENT", "Rent", "rent"),
     # ---- Health -------------------------------------------------------------------------------
     R(r"APOLLO ?PHARMACY|APOLLO ?247", "Apollo Pharmacy", "health"),
@@ -193,10 +243,21 @@ MERCHANT_RULES: list[MerchantRule] = [
     ),
     R(r"THYROCARE|LAL ?PATH|METROPOLIS|REDCLIFFE|HEALTHIANS", "Diagnostics lab", "health"),
     R(r"CVS|WALGREENS", "Pharmacy", "health"),
+    R(
+        r"MEDIBUDDY|HEALTHKART|CLOUDNINE|RAINBOW ?HOSPITAL|KAUVERY|MEDANTA|AIIMS|SANKARA ?NETHRALAYA",
+        "Healthcare",
+        "health",
+    ),
     # ---- Education ----------------------------------------------------------------------------
     R(
         r"UDEMY|COURSERA|BYJU|UNACADEMY|UPGRAD|SCALER|SIMPLILEARN|PHYSICS ?WALLAH|SKILLSHARE|EDX|GREAT ?LEARNING",
         "Online course",
+        "education",
+    ),
+    R(
+        r"CROSSWORD ?BOOKSTORE|HIGGINBOTHAMS|BRITISH ?COUNCIL|VEDANTU|ALLEN ?CAREER|AAKASH ?INSTITUTE|FIITJEE|"
+        r"CHEGG|MASTERCLASS|LEETCODE",
+        "Education",
         "education",
     ),
     # ---- Travel -------------------------------------------------------------------------------
@@ -215,20 +276,33 @@ MERCHANT_RULES: list[MerchantRule] = [
         "travel",
     ),
     R(r"REDBUS|ABHIBUS", "Bus booking", "travel"),
+    R(r"KSRTC|MSRTC|TSRTC|APSRTC|GSRTC|UPSRTC|RSRTC|HRTC", "State transport bus", "travel"),
+    R(r"THOMAS ?COOK|SOTC|AKBAR ?TRAVELS|VEENA ?WORLD", "Travel agency", "travel"),
     # ---- Entertainment ------------------------------------------------------------------------
     R(r"BOOKMYSHOW|BIGTREE", "BookMyShow", "entertainment"),
     R(r"PVR|INOX|CINEPOLIS", "Cinema", "entertainment"),
     R(r"PAYTM ?INSIDER|INSIDER ?IN|ZOMATO ?DISTRICT", "Events", "entertainment"),
     R(r"STEAM|PLAYSTATION|XBOX|NINTENDO|EPIC ?GAMES", "Gaming", "entertainment"),
     R(r"DREAM ?11|MPL|MY11CIRCLE|WINZO", "Fantasy gaming", "entertainment"),
+    R(
+        r"IMAGICA|ESSEL ?WORLD|SNOW ?WORLD|TIMEZONE|FUN ?CITY|KIDZANIA|SKYJUMPER",
+        "Amusement",
+        "entertainment",
+    ),
     # ---- Personal care ------------------------------------------------------------------------
     R(r"URBAN ?COMPANY|URBANCLAP", "Urban Company", "personal_care"),
     R(r"LAKME ?SALON|NATURALS ?SALON|ENRICH|JAWED ?HABIB|TONI ?GUY|BODYCRAFT", "Salon", "personal_care"),
     R(r"NYKAA|PURPLLE|MAMAEARTH|SUGAR ?COSMETICS", "Beauty", "personal_care"),
+    R(r"BBLUNT|YLG ?SALON|GEETANJALI ?SALON|VLCC|AFFINITY ?SALON|LOOKS ?SALON", "Salon", "personal_care"),
     # ---- Loans / EMIs -------------------------------------------------------------------------
     R(
         r"BAJAJ ?FIN(ANCE|SERV)?|HOME ?CREDIT|TATA ?CAPITAL|HDFC ?LTD ?LOAN|LOAN ?EMI|EMI ?(DEBIT|PAYMENT)|NACH ?EMI",
         "Loan EMI",
+        "loans",
+    ),
+    R(
+        r"KREDITBEE|MONEYVIEW|MONEY ?VIEW|NAVI ?FINSERV|FIBE|EARLYSALARY|LAZYPAY|SIMPL|ZESTMONEY|MPOKKET",
+        "Digital lender",
         "loans",
     ),
     # ---- Bank-to-bank transfers (family, own accounts) ----------------------------------------
@@ -245,6 +319,11 @@ MERCHANT_RULES: list[MerchantRule] = [
     ),
     # ---- Insurance ----------------------------------------------------------------------------
     R(
+        r"(?:ICICI ?PRU(?:DENTIAL)?|HDFC|SBI|AXIS|KOTAK|NIPPON|ADITYA ?BIRLA|TATA|DSP|UTI|MIRAE|PARAG ?PARIKH|PPFAS) ?(?:MF|MUTUAL ?FUND|AMC)",
+        "Mutual fund",
+        "investments",
+    ),
+    R(
         r"LIC ?OF ?INDIA|LIFE ?INSURANCE ?CORP|HDFC ?LIFE|ICICI ?PRU|SBI ?LIFE|MAX ?LIFE|TATA ?AIA|STAR ?HEALTH|NIVA ?BUPA|"
         r"CARE ?HEALTH|ACKO|GO ?DIGIT|POLICYBAZAAR|TATA ?AIG|BAJAJ ?ALLIANZ|LIC",
         "Insurance premium",
@@ -257,6 +336,11 @@ MERCHANT_RULES: list[MerchantRule] = [
         "investments",
     ),
     R(
+        r"ET ?MONEY|DHAN ?(?:APP|HQ)|RAISE ?SECURITIES|5 ?PAISA|MOTILAL ?OSWAL|ICICI ?DIRECT|ICICIDIRECT|HDFC ?SEC|KOTAK ?SEC|SHAREKHAN|COIN ?ZERODHA",
+        "Brokerage / MF",
+        "investments",
+    ),
+    R(
         # ICCL = Indian Clearing Corporation, which collects mutual-fund SIP autopays
         r"BSE ?STAR ?MF|MUTUAL ?FUND|SIP ?(DEBIT|INSTALLMENT)?|NPS ?TRUST|PPF ?DEPOSIT|RECURRING ?DEPOSIT|"
         r"ICCL|INDIAN ?CLEARING|MF ?AUTOPAY|CAMS|KFINTECH|KARVY",
@@ -264,7 +348,8 @@ MERCHANT_RULES: list[MerchantRule] = [
         "investments",
     ),
     # ---- Cash ---------------------------------------------------------------------------------
-    R(r"ATM ?(WDL|WITHDRAWAL|CASH)?|CASH ?(WDL|WITHDRAWAL)|NWD", "ATM withdrawal", "cash"),
+    R(r"ATM ?(WDL|WITHDRAWAL|CASH)?|CASH ?(WDL|WITHDRAWAL)|NWD|ATW", "ATM withdrawal", "cash"),
+    R(r"CASH ?DEP(OSIT)?|BY ?CASH ?DEPOSIT|CDM ?DEPOSIT", "Cash deposit", "transfers"),
     # ---- Fees ---------------------------------------------------------------------------------
     R(
         r"LATE ?(PAYMENT ?)?FEE|LATE ?PAYMENT ?CHARGE|PENALTY|MIN ?BAL(ANCE)? ?CHARGE|NON ?MAINT(ENANCE)? ?CHARGE|"
@@ -289,6 +374,21 @@ MERCHANT_RULES: list[MerchantRule] = [
 # Generic keyword evidence for merchants we have never seen. Weight ~ how diagnostic the token is.
 KEYWORDS: dict[str, list[tuple[str, float]]] = {
     "groceries": [
+        ("MILK PARLOUR", 0.95),
+        ("MILK BOOTH", 0.9),
+        ("MILK CENTRE", 0.85),
+        ("FRUIT", 0.6),
+        ("VEGETABLE", 0.8),
+        ("SUPERMART", 0.85),
+        ("KIRANA STORE", 0.95),
+        ("PROVISION STORE", 0.9),
+        ("DEPARTMENTAL STORE", 0.75),
+        ("FLOUR MILL", 0.85),
+        ("MEAT", 0.7),
+        ("CHICKEN CENTRE", 0.85),
+        ("MUTTON", 0.8),
+        ("FISH MARKET", 0.85),
+        ("EGGS", 0.6),
         ("SUPERMARKET", 0.9),
         ("HYPERMARKET", 0.9),
         ("KIRANA", 0.9),
@@ -306,6 +406,44 @@ KEYWORDS: dict[str, list[tuple[str, float]]] = {
         ("SUPER MARKET", 0.9),
     ],
     "dining": [
+        ("ICE CREAM", 0.9),
+        ("ICE CREAMS", 0.9),
+        ("ICECREAM", 0.9),
+        ("ICE CREAM PARLOUR", 0.95),
+        ("CREAMERY", 0.85),
+        ("DARSHINI", 0.85),
+        ("FAST FOOD", 0.9),
+        ("SNACKS", 0.7),
+        ("TANDOOR", 0.8),
+        ("BBQ", 0.8),
+        ("BARBEQUE", 0.85),
+        ("BARBECUE", 0.85),
+        ("MOMO", 0.8),
+        ("MOMOS", 0.85),
+        ("SHAWARMA", 0.9),
+        ("BHOJANALAYA", 0.9),
+        ("TIFFINS", 0.85),
+        ("IDLY", 0.8),
+        ("PANI PURI", 0.85),
+        ("FALOODA", 0.85),
+        ("LASSI", 0.75),
+        ("KULFI", 0.8),
+        ("WAFFLE", 0.8),
+        ("DESSERT", 0.75),
+        ("DESSERTS", 0.8),
+        ("PATISSERIE", 0.85),
+        ("CAKES", 0.6),
+        ("DONUTS", 0.8),
+        ("TEA STALL", 0.85),
+        ("JUICE PARLOUR", 0.9),
+        ("JUICE CENTRE", 0.9),
+        ("JUICE BAR", 0.9),
+        ("REFRESHMENT", 0.75),
+        ("REFRESHMENTS", 0.75),
+        ("BREAKFAST", 0.75),
+        ("MEALS", 0.7),
+        ("THALI", 0.85),
+        ("FOODS", 0.45),
         ("RESTAURANT", 0.9),
         ("RESTRO", 0.8),
         ("CAFE", 0.85),
@@ -341,6 +479,21 @@ KEYWORDS: dict[str, list[tuple[str, float]]] = {
         ("MESS", 0.6),
     ],
     "health": [
+        ("OPTICIANS", 0.8),
+        ("EYE CARE", 0.85),
+        ("EYE HOSPITAL", 0.95),
+        ("AYURVEDA", 0.8),
+        ("AYURVEDIC", 0.8),
+        ("HOMEOPATHY", 0.85),
+        ("VETERINARY", 0.85),
+        ("PET CLINIC", 0.85),
+        ("NURSING HOME", 0.95),
+        ("POLYCLINIC", 0.95),
+        ("MEDICINE", 0.75),
+        ("MEDICINES", 0.8),
+        ("HEALTHCARE", 0.75),
+        ("PHYSIOTHERAPY", 0.9),
+        ("SCAN CENTRE", 0.85),
         ("PHARMACY", 0.95),
         ("PHARMA", 0.8),
         ("MEDICAL", 0.85),
@@ -364,6 +517,19 @@ KEYWORDS: dict[str, list[tuple[str, float]]] = {
         ("NURSING", 0.8),
     ],
     "transport": [
+        ("AUTO WORKS", 0.85),
+        ("MOTOR WORKS", 0.85),
+        ("GARAGE", 0.8),
+        ("TYRE", 0.6),
+        ("CAR WASH", 0.85),
+        ("BIKE SERVICE", 0.85),
+        ("CAR SERVICE", 0.7),
+        ("CNG", 0.85),
+        ("EV CHARGING", 0.85),
+        ("CHARGING STATION", 0.8),
+        ("AUTOMOBILES", 0.6),
+        ("AUTOMOTIVE", 0.7),
+        ("BUS PASS", 0.8),
         ("PETROL", 0.95),
         ("FUEL", 0.9),
         ("FUELS", 0.9),
@@ -382,6 +548,11 @@ KEYWORDS: dict[str, list[tuple[str, float]]] = {
         ("TYRES", 0.6),
     ],
     "utilities": [
+        ("GAS AGENCY", 0.9),
+        ("GAS AGENCIES", 0.9),
+        ("CYLINDER", 0.8),
+        ("CABLE TV", 0.85),
+        ("WIFI", 0.75),
         ("ELECTRICITY", 0.95),
         ("POWER", 0.6),
         ("ENERGY", 0.5),
@@ -400,6 +571,19 @@ KEYWORDS: dict[str, list[tuple[str, float]]] = {
         ("BILLDESK", 0.4),
     ],
     "education": [
+        ("BOOK HOUSE", 0.85),
+        ("BOOK STORE", 0.85),
+        ("BOOKSTORE", 0.85),
+        ("BOOK CENTRE", 0.85),
+        ("BOOK CENTER", 0.85),
+        ("STATIONERS", 0.65),
+        ("TUTORIAL", 0.8),
+        ("TUTORIALS", 0.85),
+        ("SCHOOL FEE", 0.95),
+        ("SCHOOL FEES", 0.95),
+        ("COLLEGE FEES", 0.95),
+        ("TUITION FEE", 0.95),
+        ("LIBRARY", 0.7),
         ("SCHOOL", 0.9),
         ("COLLEGE", 0.85),
         ("UNIVERSITY", 0.9),
@@ -416,6 +600,26 @@ KEYWORDS: dict[str, list[tuple[str, float]]] = {
         ("EXAM FEE", 0.85),
     ],
     "shopping": [
+        ("INTERIORS", 0.8),
+        ("DECOR", 0.8),
+        ("FURNISHING", 0.85),
+        ("FURNISHINGS", 0.85),
+        ("HANDLOOM", 0.85),
+        ("HANDLOOMS", 0.85),
+        ("HANDICRAFTS", 0.85),
+        ("EMPORIUM", 0.7),
+        ("COMPUTERS", 0.7),
+        ("LAPTOP", 0.75),
+        ("APPLIANCES", 0.85),
+        ("CRAFTS", 0.55),
+        ("KIDS WEAR", 0.85),
+        ("MENS WEAR", 0.85),
+        ("SAREE", 0.85),
+        ("ETHNIC", 0.7),
+        ("LEATHER", 0.6),
+        ("CYCLES", 0.6),
+        ("SPORTS", 0.55),
+        ("ELECTRICALS", 0.7),
         ("FASHION", 0.8),
         ("APPAREL", 0.85),
         ("CLOTHING", 0.85),
@@ -443,10 +647,20 @@ KEYWORDS: dict[str, list[tuple[str, float]]] = {
         ("SILKS", 0.7),
     ],
     "personal_care": [
+        ("BEAUTY PARLOUR", 0.95),
+        ("BEAUTY PARLOR", 0.95),
+        ("LADIES PARLOUR", 0.95),
+        ("MENS SALON", 0.95),
+        ("MAKEOVER", 0.8),
+        ("NAILS", 0.7),
+        ("TATTOO", 0.8),
+        ("LAUNDRY", 0.65),
+        ("DRY CLEAN", 0.7),
+        ("DRY CLEANERS", 0.75),
         ("SALON", 0.95),
         ("SPA", 0.85),
-        ("PARLOUR", 0.9),
-        ("PARLOR", 0.9),
+        ("PARLOUR", 0.6),
+        ("PARLOR", 0.6),
         ("BEAUTY", 0.75),
         ("GROOMING", 0.85),
         ("BARBER", 0.9),
@@ -455,6 +669,12 @@ KEYWORDS: dict[str, list[tuple[str, float]]] = {
         ("HAIR", 0.6),
     ],
     "travel": [
+        ("GUEST HOUSE", 0.85),
+        ("HOMESTAYS", 0.85),
+        ("TOURISM", 0.8),
+        ("FLIGHT", 0.85),
+        ("AIR TICKET", 0.9),
+        ("TRAIN TICKET", 0.85),
         ("RESORT", 0.85),
         ("RESORTS", 0.85),
         ("INN", 0.5),
@@ -470,6 +690,15 @@ KEYWORDS: dict[str, list[tuple[str, float]]] = {
         ("HOSTELS", 0.6),
     ],
     "entertainment": [
+        ("THEME PARK", 0.9),
+        ("GO KARTING", 0.85),
+        ("KARTING", 0.8),
+        ("TRAMPOLINE", 0.85),
+        ("ESCAPE ROOM", 0.85),
+        ("PAINTBALL", 0.85),
+        ("SNOW PARK", 0.85),
+        ("GAME ZONE", 0.85),
+        ("PLAY ZONE", 0.8),
         ("CINEMA", 0.9),
         ("CINEMAS", 0.9),
         ("MOVIES", 0.8),
@@ -487,6 +716,9 @@ KEYWORDS: dict[str, list[tuple[str, float]]] = {
         ("FUN", 0.4),
     ],
     "rent": [
+        ("COLIVING", 0.85),
+        ("CO LIVING", 0.85),
+        ("LEASE RENTAL", 0.85),
         ("RENT", 0.9),
         ("LANDLORD", 0.95),
         ("PG ACCOMMODATION", 0.9),
@@ -519,6 +751,8 @@ KEYWORDS: dict[str, list[tuple[str, float]]] = {
         ("GST ON", 0.6),
     ],
     "gifts_donations": [
+        ("GIFT SHOP", 0.85),
+        ("GIFT CENTRE", 0.85),
         ("GIFT", 0.6),
         ("FLOWERS", 0.7),
         ("FLORIST", 0.85),
@@ -569,20 +803,97 @@ def match_merchant(norm_text: str) -> MerchantRule | None:
 
 
 def keyword_scores(norm_text: str) -> dict[str, float]:
-    """Noisy-OR combination of keyword evidence per category."""
-    scores: dict[str, float] = {}
+    """Noisy-OR combination of keyword evidence per category.
+
+    A matched phrase hides the shorter keywords inside it: "MILK PARLOUR" is a dairy, not a
+    beauty parlour, and "ICE CREAM PARLOUR" is not evidence for a salon.
+    """
+    hits: list[tuple[int, int, str, int, float]] = []
     for cat, pats in _KEYWORD_RX.items():
-        p_not = 1.0
-        for rx, w in pats:
-            if rx.search(norm_text):
-                p_not *= 1.0 - w
-        if p_not < 1.0:
-            scores[cat] = 1.0 - p_not
-    return scores
+        for idx, (rx, w) in enumerate(pats):
+            for m in rx.finditer(norm_text):
+                hits.append((m.start(), m.end(), cat, idx, w))
+    kept = [
+        h for h in hits if not any(o[0] <= h[0] and h[1] <= o[1] and o[1] - o[0] > h[1] - h[0] for o in hits)
+    ]
+    p_not: dict[str, float] = {}
+    seen: set[tuple[str, int]] = set()
+    for _, _, cat, idx, w in kept:
+        if (cat, idx) in seen:
+            continue  # the same keyword twice is one piece of evidence
+        seen.add((cat, idx))
+        p_not[cat] = p_not.get(cat, 1.0) * (1.0 - w)
+    return {cat: 1.0 - p for cat, p in p_not.items() if p < 1.0}
+
+
+# Rules that cover several different brands under one family label. A transaction keeps the
+# brand that actually matched ("Third Wave Coffee", "Croma"), not the label ("Café"), so people
+# can ask about the merchant they know.
+FAMILY_RULE_NAMES = frozenset(
+    {
+        "Café", "Restaurant", "Quick-service restaurant", "Dessert & coffee", "Supermarket", "Quick commerce",
+        "Meat & fish", "Fresh produce & dairy", "Food delivery", "Ride-hailing", "Metro", "Fuel", "Mobility",
+        "Electronics store", "Home furnishing", "Fashion store", "Online shopping", "Retail store", "Jewellery",
+        "Broadband", "DTH TV", "Electricity", "Water", "Cooking gas", "Piped gas", "Utility", "Pharmacy",
+        "Hospital/Clinic", "Diagnostics lab", "Healthcare", "Online course", "Education", "Airline",
+        "Hotel booking", "Travel booking", "Bus booking", "State transport bus", "Travel agency", "Cinema",
+        "Events", "Gaming", "Fantasy gaming", "Amusement", "Salon", "Beauty", "Gym membership",
+        "Streaming service", "Loan EMI", "Digital lender", "Insurance premium", "Brokerage / MF", "Mutual fund",
+        "Co-living rent", "Gift shop", "Donation", "Freelance income",
+    }
+)  # fmt: skip
+
+
+def _norm(text: str) -> str:
+    s = re.sub(r"[^A-Z0-9 ]+", " ", (text or "").upper().replace("'", ""))
+    return re.sub(r"\s+", " ", s).strip()
+
+
+_SHORT_WORDS = frozenset(
+    [
+        "OIL",
+        "AIR",
+        "PAY",
+        "CAB",
+        "BUS",
+        "BAR",
+        "PUB",
+        "TEA",
+        "ONE",
+        "NEW",
+        "BIG",
+        "TOP",
+        "BOX",
+        "CAR",
+        "GAS",
+        "FUN",
+        "INN",
+        "DAY",
+    ]
+)
+
+
+def _title(text: str) -> str:
+    """Title-case a matched brand while keeping acronyms (KFC, PVR, BMRCL) upper-case."""
+    return " ".join(
+        w if (len(w) <= 3 and w not in _SHORT_WORDS) or not re.search(r"[AEIOU]", w) else w.capitalize()
+        for w in text.split()
+    )
+
+
+def display_name(rule: MerchantRule, norm_text: str) -> str:
+    """Merchant name for a rule match: the brand itself for family rules, the rule's name otherwise."""
+    if rule.name not in FAMILY_RULE_NAMES:
+        return rule.name
+    m = rule.regex.search(norm_text)
+    matched = m.group(0).strip() if m else ""
+    if not matched or set(matched.split()) & set(_norm(rule.name).split()):
+        return rule.name
+    return _title(matched)
 
 
 def rule_by_name(name: str) -> MerchantRule | None:
     for rule in MERCHANT_RULES:
         if rule.name == name:
             return rule
-    return None
+    return match_merchant(_norm(name)) if name else None  # brand names from family rules

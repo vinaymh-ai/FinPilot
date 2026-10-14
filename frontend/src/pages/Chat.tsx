@@ -1,25 +1,73 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, ChevronDown, Eraser, Scale, Send, User, Wrench } from "lucide-react";
+import { Bot, ChevronDown, Eraser, Scale, Send, ShieldCheck, User, Wrench } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { toast } from "sonner";
+import { Artifacts } from "../components/ChatArtifacts";
 import { Badge, Button, Card, ModelBadge, ProbabilityBars } from "../components/ui";
 import { api } from "../lib/api";
 import { cn } from "../lib/format";
-import type { ChatMessage, ChatRoute, ChatTrace } from "../lib/types";
+import type { ChatArtifact, ChatMessage, ChatRoute, ChatTrace } from "../lib/types";
 
 const SESSION = "web";
-const SUGGESTIONS = [
-  "Can I afford a trip next month?",
-  "Why did my spending go up this month compared to usual?",
-  "How much did I spend on food delivery last month?",
-  "Am I on track for my emergency fund?",
-  "What are my subscriptions?",
-  "What will my balance be in 60 days?",
-  "Can I afford a ₹45,000 laptop in December?",
-  "How can I save money?",
-  "Anything unusual in my transactions?",
+const SUGGESTIONS: { group: string; items: string[] }[] = [
+  {
+    group: "Ask anything about your transactions",
+    items: [
+      "How many transactions have I made in total?",
+      "Show all my shopping transactions",
+      "Spending by category this year",
+      "Food delivery this month vs last month",
+      "Biggest credit this year",
+      "UPI vs card spending",
+    ],
+  },
+  {
+    group: "Patterns, plans & advice",
+    items: [
+      "Why did my spending go up this month compared to usual?",
+      "Anything unusual in my transactions?",
+      "What are my subscriptions?",
+      "Can I afford a ₹45,000 laptop in December?",
+      "Am I on track for my emergency fund?",
+      "How can I save money?",
+    ],
+  },
 ];
+const AGENT_LABEL: Record<string, string> = {
+  guardrails: "Guardrails",
+  capabilities: "Capabilities",
+  retriever: "Retriever",
+  sql_analyst: "SQL Analyst",
+  planner: "Planner",
+  router: "Router",
+  tool_loop: "Tool agent",
+  spending_tools: "Spending tools",
+  analyzer: "Analyzer",
+  forecaster: "Forecaster",
+  advisor: "Advisor",
+  composer: "Composer",
+  verifier: "Verifier",
+};
+
+function PipelineView({ pipeline, guard }: { pipeline: string[]; guard?: ChatMessage["guard"] }) {
+  if (!pipeline?.length) return null;
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1 text-[11.5px] text-muted">
+      <span className="mr-0.5">Agents:</span>
+      {pipeline.map((p, i) => (
+        <span key={i} className="inline-flex items-center gap-1">
+          {i > 0 && <span className="opacity-50">→</span>}
+          <Badge tone={p === "verifier" ? (guard?.ok ? "green" : "neutral") : p === "sql_analyst" ? "violet" : "neutral"}>
+            {p === "verifier" && guard?.ok && <ShieldCheck className="size-3" />}
+            {AGENT_LABEL[p] ?? p.replace(/_/g, " ")}
+          </Badge>
+        </span>
+      ))}
+    </div>
+  );
+}
 
 const ROUTE_ACTION: Record<string, { text: string; tone: "green" | "violet" | "red" | "neutral" }> = {
   answered_by_rules: { text: "answered from tools — no LLM", tone: "green" },
@@ -77,9 +125,16 @@ function TraceView({ trace }: { trace: ChatTrace[] }) {
         <div className="mt-2 space-y-2">
           {trace.map((t, i) => (
             <div key={i} className="rounded-xl border border-line bg-surface-2/60 p-2.5 text-[11.5px]">
-              <div className="font-mono font-medium text-brand">
-                {t.tool}({Object.keys(t.args ?? {}).length ? JSON.stringify(t.args) : ""})
-              </div>
+              {t.tool === "query_ledger" && typeof t.args?.sql === "string" ? (
+                <div>
+                  <div className="font-mono font-medium text-brand">query_ledger · SQL{t.args?.purpose ? ` (${String(t.args.purpose)})` : ""}</div>
+                  <pre className="mt-1 whitespace-pre-wrap break-words rounded-lg bg-surface px-2 py-1.5 font-mono text-[11px] text-ink">{String(t.args.sql)}</pre>
+                </div>
+              ) : (
+                <div className="font-mono font-medium text-brand">
+                  {t.tool}({Object.keys(t.args ?? {}).length ? JSON.stringify(t.args) : ""})
+                </div>
+              )}
               <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all font-mono text-muted">
                 {JSON.stringify(t.result, null, 1)}
               </pre>
@@ -109,13 +164,30 @@ export default function Chat() {
 
   const send = useMutation({
     mutationFn: (message: string) =>
-      api.post<{ answer: string; trace: ChatTrace[]; model: string; route: ChatRoute | null }>("/chat", { message, session_id: SESSION }),
+      api.post<{
+        answer: string;
+        trace: ChatTrace[];
+        model: string;
+        route: ChatRoute | null;
+        artifacts?: ChatArtifact[];
+        pipeline?: string[];
+        guard?: ChatMessage["guard"];
+      }>("/chat", { message, session_id: SESSION }),
     onMutate: (message) =>
       setMessages((m) => [...m, { role: "user", content: message }, { role: "assistant", content: "", pending: true }]),
     onSuccess: (r) =>
       setMessages((m) => [
         ...m.filter((x) => !x.pending),
-        { role: "assistant", content: r.answer, trace: r.trace, model: r.model, route: r.route },
+        {
+          role: "assistant",
+          content: r.answer,
+          trace: r.trace,
+          model: r.model,
+          route: r.route,
+          artifacts: r.artifacts ?? [],
+          pipeline: r.pipeline ?? [],
+          guard: r.guard ?? null,
+        },
       ]),
     onError: (e: Error) => {
       setMessages((m) => m.filter((x) => !x.pending));
@@ -160,11 +232,18 @@ export default function Chat() {
                 <div className="font-semibold">What do you want to know about your money?</div>
                 <div className="text-sm text-muted">Try one of these:</div>
               </div>
-              <div className="flex max-w-2xl flex-wrap justify-center gap-2">
-                {SUGGESTIONS.map((s) => (
-                  <button key={s} onClick={() => submit(s)} className="rounded-full border border-line bg-surface-2 px-3 py-1.5 text-[13px] transition hover:border-brand/50 hover:text-brand">
-                    {s}
-                  </button>
+              <div className="max-w-2xl space-y-3">
+                {SUGGESTIONS.map((g) => (
+                  <div key={g.group}>
+                    <div className="mb-1.5 text-[11.5px] font-medium uppercase tracking-wide text-muted">{g.group}</div>
+                    <div className="flex flex-wrap justify-center gap-2">
+                      {g.items.map((s) => (
+                        <button key={s} onClick={() => submit(s)} className="rounded-full border border-line bg-surface-2 px-3 py-1.5 text-[13px] transition hover:border-brand/50 hover:text-brand">
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>
@@ -174,7 +253,7 @@ export default function Chat() {
               <div className={cn("grid size-8 shrink-0 place-items-center rounded-full", m.role === "user" ? "bg-surface-2" : "bg-gradient-to-br from-emerald-400 to-indigo-500 text-white")}>
                 {m.role === "user" ? <User className="size-4" /> : <Bot className="size-4" />}
               </div>
-              <div className={cn("max-w-[85%] rounded-2xl px-4 py-3 text-[14px]", m.role === "user" ? "bg-surface-2" : "border border-line bg-surface")}>
+              <div className={cn("min-w-0 max-w-[85%] rounded-2xl px-4 py-3 text-[14px]", m.role === "user" ? "bg-surface-2" : "border border-line bg-surface", m.artifacts?.length && "w-full")}>
                 {m.pending ? (
                   <div className="flex gap-1 py-1">
                     {[0, 1, 2].map((d) => (
@@ -183,11 +262,13 @@ export default function Chat() {
                   </div>
                 ) : (
                   <div className="prose-fp">
-                    <Markdown>{m.content}</Markdown>
+                    <Markdown remarkPlugins={[remarkGfm]}>{m.content}</Markdown>
                   </div>
                 )}
                 {m.role === "assistant" && !m.pending && (
                   <>
+                    <Artifacts artifacts={m.artifacts ?? []} />
+                    <PipelineView pipeline={m.pipeline ?? []} guard={m.guard} />
                     {m.route && <RouteView route={m.route} />}
                     <TraceView trace={m.trace ?? []} />
                     {m.model && (
@@ -221,7 +302,7 @@ export default function Chat() {
         </form>
       </Card>
       <div className="mt-2 text-center text-[11.5px] text-muted">
-        Replies use AI reasoning with your recorded financial data. Expand the tool results to see the evidence behind financial answers.
+        A team of agents answers from your recorded data: figures are computed by code and checked before you see them. Expand “Used …” to see the exact queries.
       </div>
     </div>
   );

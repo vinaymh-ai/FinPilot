@@ -28,6 +28,7 @@ from typing import Any
 import numpy as np
 
 from finpilot.agents.base import BaseAgent
+from finpilot.domain.money import format_money
 from finpilot.domain.recurring import RecurringCandidate, TxnLite
 from finpilot.domain.stats import add_months, month_key
 from finpilot.domain.taxonomy import DISCRETIONARY, ESSENTIAL, label
@@ -70,12 +71,11 @@ class Adjustment:
         return abs(self.amount) if self.kind == "income" else -abs(self.amount)
 
     def describe(self, currency: str = "INR") -> str:
-        sym = {"INR": "₹", "USD": "$", "EUR": "€", "GBP": "£"}.get(currency, "")
         when = f" on {self.date:%d %b %Y}" if self.date else ""
         if self.type == "one_time":
-            return f"{self.label or 'One-off ' + self.kind} of {sym}{abs(self.amount):,.0f}{when}"
+            return f"{self.label or 'One-off ' + self.kind} of {format_money(abs(self.amount), currency, 0)}{when}"
         if self.type == "recurring":
-            return f"{self.label or 'Recurring ' + self.kind} of {sym}{abs(self.amount):,.0f}/{self.cadence}"
+            return f"{self.label or 'Recurring ' + self.kind} of {format_money(abs(self.amount), currency, 0)}/{self.cadence}"
         if self.type == "category_change":
             return f"{label(self.category)} spending {self.pct:+.0f}%"
         if self.type == "cancel_recurring":
@@ -627,12 +627,15 @@ def _advance(d: dt.date, r: RecurringCandidate) -> dt.date:
 # ====================================================================== agent
 
 SYSTEM_PROMPT = """You are the Forecaster agent of FinPilot. You receive a Monte-Carlo cash-flow projection for ONE user
-(all numbers are already computed and correct). Explain it in 2-3 plain sentences, second person:
-where the balance is heading if current behaviour continues, the riskiest moment, and what it means for their goals.
-Check projection_type: cashflow_change means an unknown balance. Explain changes and required starting cash,
-never claim an absolute balance, overdraft risk or goal odds. Treat forecasts as conditional historical estimates,
-not guarantees. Explain sparse history, variable obligations and missing card purchase/usage details.
-Use only numbers present in the input; round sensibly. Currency: {currency}.
+(every number is already computed and correct). Explain it in 2-3 plain sentences, second person:
+1. where the balance is heading if current behaviour continues (a checkpoint's P50 with its P10–P90 range);
+2. the riskiest moment (the low point date and value, and overdraft probability when known);
+3. what it means for the most at-risk goal (probability, shortfall, ETA), or that the goals are on track.
+Check projection_type: "cashflow_change" means the starting balance is unknown — then describe changes and the
+required starting cash, never an absolute balance, overdraft risk or goal odds. Forecasts are conditional estimates
+from the user's own history, not guarantees; mention short history or variable obligations when data_quality says so.
+Copy figures exactly as they appear in the input (keep decimals) — never round or compute new numbers.
+Currency: {currency}.
 Respond with JSON only: {{"narrative": "..."}}"""
 
 
@@ -749,13 +752,12 @@ class ForecasterAgent(BaseAgent):
     def _verdict(
         base: dict[str, Any], scen: dict[str, Any], buffer: float, currency: str
     ) -> tuple[str, list[str]]:
-        sym = {"INR": "₹", "USD": "$", "EUR": "€", "GBP": "£"}.get(currency, "")
         reasons: list[str] = []
         if scen.get("projection_type") == "cashflow_change":
             return "needs_balance", [
                 "The simulation measures cash-flow changes. A verified starting balance is needed to decide affordability.",
                 "Goal funding is excluded until a verified balance is available.",
-                f"Under the modeled cash flows, starting cash of {sym}{scen['required_starting_balance_p90']:,.2f} would preserve the buffer in 90% of paths; this is a model estimate.",
+                f"Under the modeled cash flows, starting cash of {format_money(scen['required_starting_balance_p90'], currency, 2)} would preserve the buffer in 90% of paths; this is a model estimate.",
             ]
         low10, low50 = scen["low_point"]["p10"], scen["low_point"]["p50"]
         verdict = "affordable"
@@ -763,13 +765,13 @@ class ForecasterAgent(BaseAgent):
             verdict = "not_affordable"
             reasons.append(
                 f"{scen['prob_overdraft'] * 100:.0f}% chance your balance goes negative "
-                f"(worst-case low {sym}{low10:,.0f})."
+                f"(worst-case low {format_money(low10, currency, 0)})."
             )
         elif low50 < buffer:
             verdict = "stretch"
             reasons.append(
-                f"Your balance would dip to about {sym}{low50:,.0f} around {scen['low_point']['date']}, "
-                f"below your {sym}{buffer:,.0f} safety buffer."
+                f"Your balance would dip to about {format_money(low50, currency, 0)} around {scen['low_point']['date']}, "
+                f"below your {format_money(buffer, currency, 0)} safety buffer."
             )
         for gb, gs in zip(base["goals"], scen["goals"], strict=False):
             drop = gb["probability"] - gs["probability"]
@@ -797,8 +799,8 @@ class ForecasterAgent(BaseAgent):
                     )
         if verdict == "affordable":
             reasons.append(
-                f"Lowest projected balance stays around {sym}{low50:,.0f} (above your "
-                f"{sym}{buffer:,.0f} buffer) and goal odds hold."
+                f"Lowest projected balance stays around {format_money(low50, currency, 0)} (above your "
+                f"{format_money(buffer, currency, 0)} buffer) and goal odds hold."
             )
         return verdict, reasons
 
@@ -810,7 +812,6 @@ class ForecasterAgent(BaseAgent):
         currency: str,
         search_wait: bool,
     ) -> list[dict[str, Any]]:
-        sym = {"INR": "₹", "USD": "$", "EUR": "€", "GBP": "£"}.get(currency, "")
         out: list[dict[str, Any]] = []
         one_offs = [a for a in adjustments if a.type == "one_time" and a.kind == "expense" and a.date]
         if search_wait and one_offs and len(adjustments) == len(one_offs):
@@ -852,18 +853,18 @@ class ForecasterAgent(BaseAgent):
                 monthly = sum(p["cut"] for p in plan)
                 funded = min(cost, monthly * months)
                 parts = ", ".join(
-                    f"{p['label']} ({sym}{p['current_monthly']:,.0f} → "
-                    f"{sym}{p['current_monthly'] - p['cut']:,.0f})"
+                    f"{p['label']} ({format_money(p['current_monthly'], currency, 0)} → "
+                    f"{format_money(p['current_monthly'] - p['cut'], currency, 0)})"
                     for p in plan
                 )
                 text = (
-                    f"Cut {parts} — {pct * 100:.0f}% less, saving {sym}{monthly:,.0f}/month — for {months} "
+                    f"Cut {parts} — {pct * 100:.0f}% less, saving {format_money(monthly, currency, 0)}/month — for {months} "
                     f"month{'s' if months > 1 else ''} to fund it"
                 )
                 text += (
                     "."
                     if funded >= cost - 1
-                    else f"; that covers {sym}{funded:,.0f} of the {sym}{cost:,.0f}."
+                    else f"; that covers {format_money(funded, currency, 0)} of the {format_money(cost, currency, 0)}."
                 )
                 out.append(
                     {
@@ -881,7 +882,6 @@ class ForecasterAgent(BaseAgent):
     # ------------------------------------------------------------------ narrative
     @staticmethod
     def _template(res: dict[str, Any], currency: str) -> str:
-        sym = {"INR": "₹", "USD": "$", "EUR": "€", "GBP": "£"}.get(currency, "")
         cps = {c["days"]: c for c in res["checkpoints"]}
         cp = cps.get(90) or (res["checkpoints"][-1] if res["checkpoints"] else None)
         parts = []
@@ -889,7 +889,7 @@ class ForecasterAgent(BaseAgent):
             return (
                 (
                     f"Your starting balance is unverified. Estimated net cash-flow change over {cp['days']} days is "
-                    f"{sym}{cp['p50']:,.2f} (P10 {sym}{cp['p10']:,.2f}; P90 {sym}{cp['p90']:,.2f}). "
+                    f"{format_money(cp['p50'], currency, 2)} (P10 {format_money(cp['p10'], currency, 2)}; P90 {format_money(cp['p90'], currency, 2)}). "
                     "These are changes, not account balances; goal odds and affordability need a verified balance."
                 )
                 if cp
@@ -897,17 +897,19 @@ class ForecasterAgent(BaseAgent):
             )
         if cp:
             parts.append(
-                f"If you keep spending like this, your balance should be around {sym}{cp['p50']:,.0f} in "
-                f"{cp['days']} days (likely range {sym}{cp['p10']:,.0f}–{sym}{cp['p90']:,.0f})."
+                f"If you keep spending like this, your balance should be around {format_money(cp['p50'], currency, 0)} in "
+                f"{cp['days']} days (likely range {format_money(cp['p10'], currency, 0)}–{format_money(cp['p90'], currency, 0)})."
             )
         lp = res["low_point"]
-        parts.append(f"The tightest point is around {lp['date']} at about {sym}{lp['p50']:,.0f}.")
+        parts.append(
+            f"The tightest point is around {lp['date']} at about {format_money(lp['p50'], currency, 0)}."
+        )
         risky = [g for g in res["goals"] if g["status"] in ("at_risk", "off_track")]
         if risky:
             g = risky[0]
             parts.append(
                 f"'{g['name']}' is {g['probability'] * 100:.0f}% likely by {g['deadline']} — about "
-                f"{sym}{g['shortfall']:,.0f} short at this pace."
+                f"{format_money(g['shortfall'], currency, 0)} short at this pace."
             )
         elif res["goals"]:
             parts.append("Your goals are on track.")

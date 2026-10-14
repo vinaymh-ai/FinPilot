@@ -23,6 +23,7 @@ from typing import Any
 
 from finpilot.agents.analyzer import AnalysisReport, Finding
 from finpilot.agents.base import BaseAgent
+from finpilot.domain.money import format_money
 from finpilot.domain.taxonomy import DISCRETIONARY, label
 from finpilot.llm.grounding import check_grounding
 
@@ -31,9 +32,7 @@ SUPPRESS_DAYS = 30
 
 
 def money(amount: float, currency: str = "INR") -> str:
-    sym = {"INR": "₹", "USD": "$", "EUR": "€", "GBP": "£"}.get(currency, "")
-    digits = 2 if round(abs(amount), 2) != round(abs(amount)) else 0
-    return f"{'-' if amount < 0 else ''}{sym}{abs(amount):,.{digits}f}"
+    return format_money(amount, currency)
 
 
 @dataclass
@@ -86,16 +85,18 @@ class Candidate:
 
 
 SYSTEM_PROMPT = """You are the Advisor agent of FinPilot, a proactive personal-finance co-pilot. You receive ranked,
-pre-computed recommendations for ONE user, each with its evidence. Rewrite each one so it reads like a sharp,
-friendly human advisor talking to this specific person:
-- title: max 70 characters, starts with the action verb, names the specific merchant/category/goal.
-- message: 1-2 sentences, second person, cites the key evidence and the saving.
-- Use ONLY numbers that appear in that recommendation's evidence or template text. Never invent figures.
-- No generic tips ("save more", "make a budget"). Keep the currency symbol {sym}.
-- State conditional savings as conditional. Do not claim unused subscriptions without user confirmation,
-  guaranteed returns, fraud, or affordability when the balance is unknown. Card bills are obligations;
-  their underlying purchases are unavailable. Payment review is not a saving or debt forgiveness.
-Also write a one-sentence weekly "headline" that names the single most important thing this week.
+pre-computed recommendations for ONE user, each with its evidence and a template wording that is already correct.
+Rewrite each so it reads like a sharp, friendly human advisor talking to this specific person:
+- title: max 70 characters, starts with an action verb, names the specific merchant / category / goal.
+- message: 1-2 sentences, second person: the evidence (what you saw, with its figure and period), then the action
+  and its effect. Example: "You spent ₹12,802.40 on food delivery in the last 30 days, 47% above your ₹8,694.19
+  average — mostly Swiggy. Capping it at your usual level frees about ₹4,108.21 a month."
+- Use ONLY numbers that appear in that recommendation's evidence or template text, copied exactly (keep decimals);
+  never round, add up or invent figures. Keep the currency symbol {sym}.
+- No generic tips ("save more", "make a budget"). State conditional savings as conditional. Do not claim unused
+  subscriptions without user confirmation, guaranteed returns, fraud, or affordability when the balance is unknown.
+  Card bills are obligations whose underlying purchases are unavailable. A payment review is not a saving.
+Also write a one-sentence weekly "headline" naming the single most important action this week (from item 0 or 1).
 Respond with JSON only: {{"headline": "...", "items": [{{"id": <id>, "title": "...", "message": "..."}}]}}"""
 
 
@@ -126,6 +127,8 @@ class AdvisorAgent(BaseAgent):
         cands += self._cashflow_risk(forecast)
         cands += self._goals(forecast, cands, goal_history or {})
         cands += self._idle_cash(forecast, income)
+        cands += self._data_quality(report)
+        cands += self._pace(report)
 
         suppressed = self._apply_feedback(cands, feedback or [])
         for c in cands:
@@ -369,6 +372,14 @@ Do not recommend payments or change user data; this is advice for user review. T
             ticket = m["recent"] / m["count"] if m.get("count") else None
             ticket_txt = f", avg {money(ticket, cur)} each" if ticket else ""
             discretionary = cat in DISCRETIONARY
+            drivers = m.get("drivers") or []
+            driver_txt = (
+                " Most of the increase is "
+                + " and ".join(f"{d['merchant']} (+{money(d['increase'], cur)})" for d in drivers)
+                + "."
+                if drivers
+                else ""
+            )
             out.append(
                 Candidate(
                     kind="category_spike",
@@ -376,7 +387,7 @@ Do not recommend payments or change user data; this is advice for user review. T
                     title=f"Bring {label(cat).lower()} back to {money(m['baseline'], cur)}/month",
                     message=f"You spent {money(m['recent'], cur)} on {label(cat).lower()} in the last 30 days — "
                     f"{m['change_pct']:.0f}% above your {money(m['baseline'], cur)} average "
-                    f"({m['count']} transactions{ticket_txt}). Returning to your usual level saves about "
+                    f"({m['count']} transactions{ticket_txt}).{driver_txt} Returning to your usual level saves about "
                     f"{money(m['impact'], cur)}/month.",
                     action=f"Cap {label(cat).lower()} at {money(m['baseline'], cur)}/month",
                     monthly_impact=m["impact"],
@@ -390,6 +401,7 @@ Do not recommend payments or change user data; this is advice for user review. T
                         "count": m.get("count"),
                         "avg_ticket": round(ticket, 2) if ticket else None,
                         "saving": m["impact"],
+                        "drivers": drivers,
                         "transaction_ids": f.transaction_ids[:50],
                     },
                     reasoning=[
@@ -596,6 +608,10 @@ Do not recommend payments or change user data; this is advice for user review. T
                             "funding_levers": [
                                 {"action": p.action, "monthly": p.monthly_impact} for p in plan
                             ],
+                            "funding_covered_monthly": round(covered, 2),
+                            "funding_share_of_gap_pct": round(min(100.0, covered / need * 100), 1)
+                            if need
+                            else None,
                         },
                         reasoning=[
                             f"Forecaster: {g['probability'] * 100:.0f}% of simulated paths fund '{g['name']}' "
@@ -678,6 +694,60 @@ Do not recommend payments or change user data; this is advice for user review. T
                 ],
                 confidence=0.6,
                 urgency="low",
+            )
+        ]
+
+    def _data_quality(self, report: AnalysisReport) -> list[Candidate]:
+        """Uncertain categories make every other number less exact; ask the user to confirm them."""
+        f = next((f for f in report.findings if f.kind == "review_queue"), None)
+        if f is None:
+            return []
+        m = f.metrics
+        names = ", ".join(x["merchant"] for x in m.get("merchants", [])[:3])
+        return [
+            Candidate(
+                kind="review_categories",
+                key="review",
+                title=f"Confirm {m['count']} uncertain transactions",
+                message=f"{m['count']} transactions ({money(m['outflow'], self.currency)} out, {m['share_pct']}% of outflows) "
+                f"have an uncertain category — mostly {names}. Confirming them makes every total, trend and forecast exact; "
+                "FinPilot remembers each answer for future imports.",
+                action="Open Transactions → Needs review and confirm or correct the categories",
+                monthly_impact=0.0,
+                trigger="analyzer:review_queue",
+                evidence=dict(m, transaction_ids=f.transaction_ids[:100]),
+                reasoning=[
+                    f"Categorizer confidence below 0.7 (or no category) for {m['count']} transactions",
+                    "Corrections become merchant memory, so the same payees are labelled correctly next time",
+                ],
+                confidence=0.9,
+                urgency="normal" if m["share_pct"] >= 5 else "low",
+            )
+        ]
+
+    def _pace(self, report: AnalysisReport) -> list[Candidate]:
+        f = next((f for f in report.findings if f.kind == "spending_pace" and f.severity == "warning"), None)
+        if f is None or any(x.kind == "category_spike" for x in report.findings):
+            return []  # a category spike already explains the same increase more specifically
+        m = f.metrics
+        return [
+            Candidate(
+                kind="spending_pace",
+                key="pace",
+                title=f"Slow day-to-day spending — up {m['change_pct']:.0f}% this month",
+                message=f"You've spent {money(m['month_to_date'], self.currency)} in the first {m['days']} days of this month vs "
+                f"{money(m['same_point_last_month'], self.currency)} by the same day last month (bills excluded). "
+                "Holding to last month's pace for the rest of the month keeps the difference in your account.",
+                action="Pause non-essential purchases until month-end",
+                monthly_impact=round(m["impact"], 2),
+                trigger="analyzer:spending_pace",
+                evidence=dict(m, transaction_ids=f.transaction_ids[:100]),
+                reasoning=[
+                    "Analyzer: month-to-date variable spending compared with the same days of the previous month",
+                    "Rent, EMIs, card bills and one-off anomalies are excluded so only habits are compared",
+                ],
+                confidence=0.6,
+                urgency="normal",
             )
         ]
 

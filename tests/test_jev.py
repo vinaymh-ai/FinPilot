@@ -202,10 +202,12 @@ def test_categorizer_uses_jev_per_unique_merchant(fake_jev_factory):
         assert {d.action for d in logged} == {"accepted", "deferred"}
 
 
-def test_person_payee_alone_does_not_establish_a_transfer(fake_jev_factory):
+def test_person_to_account_payment_is_a_transfer_pending_review(fake_jev_factory):
     _, client = fake_jev_factory({"payee_type": lambda s, k: "person"})
     results, _ = CategorizerAgent(jev=client).categorize([CatItem(1, "IMPS P2A 33221 KZQX", -2500.0)])
-    assert results[0].category == "other"
+    # The bank's P2A marker makes it a person-to-person transfer by kind; the purpose stays unconfirmed.
+    assert results[0].category == "transfers" and results[0].source == "p2p"
+    assert results[0].confidence < 0.7
 
 
 def test_categorizer_reasoning_runs_even_when_optional_retry_is_off(fake_jev_factory, fake_router_factory):

@@ -1,11 +1,108 @@
 import { useQuery } from "@tanstack/react-query";
-import { FlaskConical, Gauge, MessageCircle, Radar, Scale, Tags, TrendingUp } from "lucide-react";
+import { CheckCircle2, FlaskConical, Gauge, Landmark, MessageCircle, Radar, Scale, Tags, TrendingUp, XCircle } from "lucide-react";
 import { SimpleBars } from "../components/charts";
 import { Badge, Card, CardHeader, Empty, PageHeader, Skeleton, Stat } from "../components/ui";
 import { api } from "../lib/api";
 import { titleCase } from "../lib/format";
 
 const pctv = (x: number | null | undefined, d = 0) => (x == null ? "–" : `${(x * 100).toFixed(d)}%`);
+
+function NarrationSection({ n }: { n: any }) {
+  const fr = n.first_run;
+  return (
+    <Card>
+      <CardHeader
+        title="Real-world narration benchmark"
+        subtitle={<>{n.cases} hand-labelled narrations in {n.banks.join(", ")} formats · <code>evaluation/narration_cases.py</code></>}
+        icon={<Landmark className="size-4" />}
+      />
+      <div className="overflow-x-auto p-5 pt-3">
+        <table className="w-full text-[12.5px]">
+          <thead className="text-left text-muted">
+            <tr>
+              <th className="py-1.5 font-medium">Measurement</th>
+              <th className="pl-3 text-right font-medium">Category</th>
+              <th className="pl-3 text-right font-medium">Channel</th>
+              <th className="pl-3 text-right font-medium">Confident share</th>
+              <th className="pl-3 text-right font-medium">Precision when confident</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr className="border-t border-line">
+              <td className="py-1.5">First run, {fr.date} <Badge tone="blue">held-out</Badge></td>
+              <td className="num text-right">{pctv(fr.category_accuracy, 1)}</td>
+              <td className="num text-right">{pctv(fr.channel_accuracy, 1)}</td>
+              <td className="num text-right">{pctv(fr.confident_share)}</td>
+              <td className="num text-right">{pctv(fr.confident_precision, 1)}</td>
+            </tr>
+            <tr className="border-t border-line font-medium">
+              <td className="py-1.5">Current (after fixing the generic bugs it exposed)</td>
+              <td className="num text-right">{pctv(n.category_accuracy, 1)}</td>
+              <td className="num text-right">{pctv(n.channel_accuracy, 1)}</td>
+              <td className="num text-right">{pctv(n.confident_share)}</td>
+              <td className="num text-right">{pctv(n.confident_precision, 1)}</td>
+            </tr>
+          </tbody>
+        </table>
+        {n.errors.length > 0 && (
+          <div className="mt-3 text-[12px] text-muted">
+            Remaining misses:{" "}
+            {n.errors.map((e: any, i: number) => (
+              <span key={i}>
+                {i > 0 && "; "}
+                <code>{e.narration}</code> → {e.got} (expected {e.expected})
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function ChatQASection({ qa }: { qa: any }) {
+  return (
+    <Card>
+      <CardHeader
+        title={`Ask FinPilot — end-to-end answer accuracy ${pctv(qa.accuracy, 1)}`}
+        subtitle={`${qa.cases} questions · the bold figures in each answer must equal values computed independently from ground truth`}
+        icon={<MessageCircle className="size-4" />}
+      />
+      <div className="flex flex-wrap gap-1.5 px-5">
+        {Object.entries(qa.by_agent).map(([k, v]: [string, any]) => (
+          <Badge key={k} tone={v.accuracy === 1 ? "green" : "amber"}>
+            {k === "sql_analyst" ? "SQL Analyst" : titleCase(k)} {v.cases} · {pctv(v.accuracy)}
+          </Badge>
+        ))}
+      </div>
+      <div className="max-h-[420px] overflow-auto p-5 pt-3">
+        <table className="w-full text-[12.5px]">
+          <thead className="sticky top-0 bg-surface text-left text-muted">
+            <tr>
+              <th className="py-1.5 font-medium">Question</th>
+              <th className="text-right font-medium">Expected</th>
+              <th className="text-right font-medium">Answer</th>
+              <th className="w-8" />
+            </tr>
+          </thead>
+          <tbody>
+            {qa.results.map((r: any) => (
+              <tr key={r.question} className="border-t border-line">
+                <td className="py-1.5 pr-3">{r.question}</td>
+                <td className="num text-right">{Array.isArray(r.expected) ? r.expected.join(" / ") : String(r.expected)}</td>
+                <td className="num text-right">{Array.isArray(r.got) ? r.got.join(" / ") : String(r.got ?? "–")}</td>
+                <td className="text-center">
+                  {r.ok ? <CheckCircle2 className="inline size-4 text-emerald-500" /> : <XCircle className="inline size-4 text-red-500" />}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="mt-2 text-[12px] text-muted">{qa.mode}. {qa.truth}.</p>
+      </div>
+    </Card>
+  );
+}
 
 function JevSection({ j }: { j: any }) {
   const b = j.baselines;
@@ -137,6 +234,44 @@ export default function Evaluation() {
         <Stat label="Anomaly detection F1" value={det.anomalies.f1.toFixed(3)} hint={`P ${det.anomalies.precision.toFixed(2)} · R ${det.anomalies.recall.toFixed(2)}`} icon={<Radar className="size-4" />} />
         <Stat label="30-day forecast error" value={`${h30.finpilot_p50.toFixed(1)}%`} hint={`of monthly income · naive ${h30.naive_last_30d.toFixed(0)}%`} icon={<TrendingUp className="size-4" />} tone="up" />
       </div>
+      {c.confident_labels && (
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <Stat
+            label="Precision when confident"
+            value={pctv(c.confident_labels.precision, 2)}
+            hint={`${pctv(c.confident_labels.share, 1)} of rows labelled ≥ ${c.confident_labels.threshold}; the rest go to review`}
+            icon={<CheckCircle2 className="size-4" />}
+          />
+          {data.narrations && (
+            <Stat
+              label="Real bank narrations"
+              value={pctv(data.narrations.category_accuracy, 1)}
+              hint={`first held-out run ${pctv(data.narrations.first_run.category_accuracy, 1)} · ${data.narrations.cases} cases`}
+              icon={<Landmark className="size-4" />}
+            />
+          )}
+          {data.chat_qa && (
+            <Stat
+              label="Chat answer accuracy"
+              value={pctv(data.chat_qa.accuracy, 1)}
+              hint={`${data.chat_qa.cases} questions vs ground truth`}
+              icon={<MessageCircle className="size-4" />}
+            />
+          )}
+          <Stat
+            label="Channel · direction"
+            value={pctv(c.channel_accuracy, 1)}
+            hint={`debit/credit ${pctv(c.direction_accuracy, 1)} · hold-out leaks ${c.holdout_integrity.leaked_into_lexicon.length}`}
+            icon={<Gauge className="size-4" />}
+          />
+        </div>
+      )}
+      {(data.chat_qa || data.narrations) && (
+        <div className="grid gap-6 xl:grid-cols-2">
+          {data.chat_qa && <ChatQASection qa={data.chat_qa} />}
+          {data.narrations && <NarrationSection n={data.narrations} />}
+        </div>
+      )}
 
       {data.jev && <JevSection j={data.jev} />}
 
@@ -153,6 +288,15 @@ export default function Evaluation() {
               height={260}
             />
           </div>
+          {c.accuracy_by_source && (
+            <div className="flex flex-wrap gap-1.5 px-5 pb-3">
+              {Object.entries(c.accuracy_by_source).map(([k, v]: [string, any]) => (
+                <Badge key={k} tone={v.accuracy >= 0.95 ? "green" : v.accuracy >= 0.8 ? "amber" : "neutral"}>
+                  {k}: {v.transactions} rows · {pctv(v.accuracy, 1)}
+                </Badge>
+              ))}
+            </div>
+          )}
           <p className="px-5 pb-5 text-[12.5px] text-muted">{data.llm_note}</p>
         </Card>
         <Card>

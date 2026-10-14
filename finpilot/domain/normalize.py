@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 
-from finpilot.domain.lexicon import match_merchant
+from finpilot.domain.lexicon import display_name, match_merchant
 
 _CHANNEL_PREFIX = re.compile(
     r"^(?:(?:POS|ECOM|PUR|PURCHASE|DEBIT CARD|DEBIT|DC|CC|VISA|MC|NFC|ACH ?[DC]?|NACH|ECS|BIL|BILLPAY|IMPS|NEFT|RTGS|"
@@ -134,11 +134,17 @@ _STOPWORDS = {
 }
 _PERSON_HINT = re.compile(r"^[A-Z]{2,15}( [A-Z]{1,15}){1,2}$")
 _BUSINESS_HINT = re.compile(
-    r"STORE|MART|SHOP|CAFE|RESTAURANT|HOTEL|MEDIC|PHARMA|TRADERS|ENTERPRISE|AGENC|CENTRE|CENTER|BAKERY|SWEETS|"
+    r"STORE|MART\b|SHOP|CAFE|RESTAURANT|HOTEL|MEDIC|PHARMA|TRADERS|ENTERPRISE|AGENC|CENTRE|CENTER|BAKERY|SWEETS|"
     r"FOODS|KITCHEN|SALON|CLINIC|HOSPITAL|PETROL|FUEL|MOTORS|TEXTILE|GARMENT|JEWEL|ELECTRONIC|MOBILE|STATION|"
     r"SUPER|BAZAAR|BHAVAN|BHAWAN|DHABA|LTD|PVT|LLP|SOLUTIONS|SERVICES|ACADEMY|SCHOOL|COLLEGE|INSTITUTE|"
     r"STUDIO|BOUTIQUE|DAIRY|FRESH|GYM|FITNESS|BOOK|PHOTO|TRAVEL|TOURS|RENT|AUTO|CABS|LAUNDRY|DRY CLEAN|"
-    r"CHARGE|FEE|INTEREST|SALARY|REFUND|ATM|EMI|LOAN|INSURANCE|POLICY|BILL|RECHARGE|TAX|GOVT|MUNICIPAL"
+    r"CHARGE|FEE|INTEREST|SALARY|REFUND|ATM|EMI|LOAN|INSURANCE|POLICY|BILL|RECHARGE|TAX|GOVT|MUNICIPAL|"
+    # whole-word business vocabulary: a leading boundary keeps SHUBHAM from matching HUB
+    r"\b(?:PARLOUR|PARLOR|WORKS|DESIGN|INTERIOR|DECOR|HOLIDAY|OVERSEAS|EXPORT|IMPORT|INDUSTR|CORPORATION|"
+    r"ASSOCIATES|CONSULT|HUB|POINT|ZONE|WORLD|PALACE|DARBAR|CORNER|PLAZA|GALLERY|EMPORIUM|COLLECTION|"
+    r"CREATION|VENTURE|INTERNATIONAL|GLOBAL|HOUSEHELP|MAID|LAUNDRY|TAILOR|FARM|CREAM|TRUST|FOUNDATION|"
+    r"TEMPLE|CLUB|STAY|HOSTEL|LODGE|RESORT|INN\b|DIAGNOSTIC|DENTAL|OPTIC|MOBILES|BAZAR|KIRANA|"
+    r"PROVISION|VEGETABLE|FRUIT|BIRYANI|DHABA|ENTERTAINMENT|CINEMA|GAMES|SPORTS)"
 )
 
 
@@ -171,7 +177,8 @@ def is_card_repayment(description: str) -> bool:
     return bool(
         re.search(
             r"\b(?:CREDIT\s*CARD|CC|CARD)\s*(?:BILL|PAYMENT|REPAYMENT|SETTLEMENT)\b|"
-            r"\b(?:ICICI|HDFC|SBI|AXIS|KOTAK)\s+CRED(?:IT\s*CARD)?\b",
+            r"\b(?:ICICI|HDFC|SBI|AXIS|KOTAK)(?:\s+BANK)?\s+CRED(?:IT\s*CARD)?\b|"
+            r"\bAUTO\s*DEBIT\s+CC\w*",
             normalize_text(description),
         )
     )
@@ -202,19 +209,31 @@ def merchant_matches(query: str, merchant: str, description: str) -> bool:
     )
 
 
+_NOTE_NOISE = re.compile(
+    r"^(?:BY|TO) TRANSFER$|^PAYMENT (?:FROM|FR|TO)\b|^PAID VIA$|^SENT USING\b|^REV$|^P2A$|^P2P$|"
+    r"\bBANK\b|^STATE BANK|^(?:HDFC|ICICI|AXIS|KOTAK|SBI|YES|IDFC|INDUSIND|FEDERAL|CANARA|PNB|BOB)$"
+)
+
+
 def _upi_payee(description: str) -> tuple[str | None, str | None]:
-    """Return (payee_name, vpa_handle) for UPI-style descriptions."""
+    """Return (payee_name, vpa_handle) for UPI-style (and IMPS person-to-account) narrations.
+
+    Banks print the payee *before* the VPA ("UPI/DR/ref/NAME/BANK/name@vpa/note"); whatever
+    follows the VPA is the payer's bank and note. ICICI's "UPI/ref/note/vpa/bank" has no payee
+    name at all, so the VPA handle identifies the payee there.
+    """
     up = description.upper()
-    if "UPI" not in up and "@" not in up:
+    if "UPI" not in up and "@" not in up and not re.search(r"\bP2A\b", up):
         return None, None
     parts = [p.strip() for p in re.split(r"[/\-|]", description) if p.strip()]
-    vpa = next((p for p in parts if "@" in p), None)
+    vpa_index = next((i for i, p in enumerate(parts) if "@" in p), None)
+    vpa = parts[vpa_index] if vpa_index is not None else None
     handle = vpa.split("@")[0].upper() if vpa else None
-    for p in parts:
-        u = p.upper().strip()
+    for p in parts if vpa_index is None else parts[:vpa_index]:
+        u = re.sub(r"\s+", " ", p.upper().strip())
         if u in _UPI_NOISE or "@" in u or re.fullmatch(r"[\dX*]+", u) or _IFSC.fullmatch(u):
             continue
-        if len(u) <= 2 or u in _BANK_CODES:
+        if len(u) <= 2 or u in _BANK_CODES or _NOTE_NOISE.search(u):
             continue
         return u, handle
     return None, handle
@@ -256,16 +275,88 @@ def merchant_key(description: str) -> tuple[str, str]:
     probe = " ".join(x for x in (payee or norm, handle or "") if x)
     rule = match_merchant(probe)
     if rule is not None and rule.name != "Credit card payment":
-        return rule.name, norm
+        return display_name(rule, probe), norm
     return clean_merchant(description), norm
 
 
+CHANNELS = {
+    "upi": "UPI",
+    "card": "Card (POS / online)",
+    "netbanking": "Net banking / bill pay",
+    "neft": "NEFT",
+    "imps": "IMPS",
+    "rtgs": "RTGS",
+    "atm": "ATM / cash withdrawal",
+    "auto_debit": "Auto-debit (NACH / ECS / standing instruction)",
+    "cheque": "Cheque",
+    "cash_deposit": "Cash deposit",
+    "bank": "Bank interest / charges",
+    "wallet": "Wallet",
+    "other": "Other",
+}
+# Order matters: a specific rail ("MMT/IMPS", "NACH") wins over a generic word elsewhere in the
+# narration, and UPI narrations often contain bank codes that look like other rails.
+_CHANNEL_RULES: list[tuple[str, re.Pattern[str]]] = [
+    ("atm", re.compile(r"\b(?:ATM|NWD|ATW|CASH ?WDL|CASH ?WITHDRAWAL|CWDR)\b")),
+    ("cash_deposit", re.compile(r"\b(?:CASH ?DEP(?:OSIT)?|BY ?CASH|CDM)\b")),
+    ("upi", re.compile(r"\bUPI\b|@[A-Z]{2,}")),
+    ("auto_debit", re.compile(r"\b(?:NACH|ECS|ACH|SI|AUTOPAY|MANDATE|AUTO ?DEBIT|STANDING ?INSTRUCTION)\b")),
+    ("imps", re.compile(r"\b(?:IMPS|MMT)\b")),
+    ("neft", re.compile(r"\bNEFT\b")),
+    ("rtgs", re.compile(r"\bRTGS\b")),
+    (
+        "card",
+        re.compile(
+            r"\b(?:POS|ECOM|VISA|MASTERCARD|RUPAY|DEBIT ?CARD|CREDIT ?CARD ?PUR|PUR|VPS|IPS|PCD|DC ?\d{4})\b"
+        ),
+    ),
+    ("cheque", re.compile(r"\b(?:CHQ|CHEQUE|CLG|CLEARING|INWARD ?CLG)\b")),
+    (
+        "netbanking",
+        re.compile(
+            r"\b(?:INB|INF|INFT|NETBANKING|NET ?BANKING|BIL|BILLPAY|BILL ?PAY|BPAY|IB|TPT|ONLINE ?TRANSFER)\b"
+        ),
+    ),
+    ("wallet", re.compile(r"\b(?:WALLET|PAYTM ?WALLET|AMAZON ?PAY ?BALANCE)\b")),
+    (
+        "bank",
+        re.compile(
+            r"\b(?:INT(?:EREST)? ?(?:PD|PAID|CR|CREDIT)|CREDIT ?INTEREST|SB ?INT|CHARGES|CHGS|GST|TDS|MIN ?BAL)\b"
+        ),
+    ),
+]
+
+
+def detect_channel(description: str) -> str:
+    """Payment rail used for a transaction (UPI, card, NEFT, ATM…), read from the bank narration."""
+    norm = (description or "").upper()
+    norm = re.sub(r"[^A-Z0-9@ ]+", " ", norm)
+    for channel, rx in _CHANNEL_RULES:
+        if rx.search(norm):
+            return channel
+    return "other"
+
+
+def direction_of(amount: float) -> str:
+    """Money leaving the account is a debit; money arriving is a credit."""
+    return "credit" if amount > 0 else "debit"
+
+
 def looks_like_person(description: str) -> bool:
-    """Heuristic: a UPI payee that looks like a personal name (P2P transfer), not a business."""
+    """A UPI payee that is an individual (person-to-person payment), not a business.
+
+    Shape alone ("TWO WORDS") cannot separate "PRIYA NAIR" from "GREEN TRENDS", so a person needs
+    positive evidence: a common given name or surname, or a phone-number UPI handle.
+    """
     payee, handle = _upi_payee(description)
     if not payee or _BUSINESS_HINT.search(payee):
         return False
+    from finpilot.domain.names import GIVEN_NAMES, SURNAMES
+
+    tokens = payee.split()
+    phone_handle = bool(handle and re.fullmatch(r"\d{10}", handle))
     if _PERSON_HINT.fullmatch(payee):
-        return True
+        named = tokens[0] in GIVEN_NAMES or any(t in SURNAMES for t in tokens[1:])
+        return named or phone_handle
     # one-word names are common in India ("HANUMANTHA"); a phone-number UPI handle confirms a person
-    return bool(re.fullmatch(r"[A-Z]{3,15}", payee) and handle and re.fullmatch(r"\d{10}", handle))
+    return bool(re.fullmatch(r"[A-Z]{3,15}", payee) and (phone_handle or payee in GIVEN_NAMES))

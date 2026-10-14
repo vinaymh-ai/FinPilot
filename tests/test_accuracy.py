@@ -333,7 +333,9 @@ def test_person_name_and_recurring_cadence_do_not_prove_purpose():
         for i, m in enumerate(range(1, 5), start=1)
     ]
     results, _ = agent.categorize(items)
-    assert all(r.category == "other" for r in results)
+    # A person-to-person payment is a transfer by kind, but its purpose stays unconfirmed (review).
+    assert all(r.category == "transfers" and r.confidence < 0.7 for r in results)
+    assert all("purpose isn't stated" in r.reason for r in results)
     lite = [
         TxnLite(r.key, it.date, it.amount, r.merchant, r.category)
         for it, r in zip(items, results, strict=True)

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, ChevronLeft, ChevronRight, FileUp, KeyRound, Plus, Receipt, Repeat, Search, TriangleAlert, Upload, X, Zap } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, CheckCircle2, ChevronLeft, ChevronRight, FileUp, KeyRound, Plus, Receipt, Repeat, Search, TriangleAlert, Upload, X, Zap } from "lucide-react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { CategoryPill, SourceBadge } from "../components/domain";
@@ -9,7 +9,29 @@ import { cn, date, money } from "../lib/format";
 import { useMeta, useRefreshAll } from "../lib/hooks";
 import type { Txn } from "../lib/types";
 
-type Page = { total: number; page: number; page_size: number; items: Txn[]; sources: Record<string, number> };
+type Page = {
+  total: number;
+  page: number;
+  page_size: number;
+  items: Txn[];
+  sources: Record<string, number>;
+  totals?: { debits: number; credits: number; debit_count: number; credit_count: number };
+};
+const CHANNELS: Record<string, string> = {
+  upi: "UPI",
+  card: "Card",
+  netbanking: "Net banking",
+  neft: "NEFT",
+  imps: "IMPS",
+  rtgs: "RTGS",
+  atm: "ATM",
+  auto_debit: "Auto-debit",
+  cheque: "Cheque",
+  cash_deposit: "Cash deposit",
+  bank: "Bank",
+  wallet: "Wallet",
+  other: "Other",
+};
 type ImportSummary = {
   format: string;
   rows: number;
@@ -141,6 +163,8 @@ export default function Transactions() {
   const [category, setCategory] = useState("");
   const [source, setSource] = useState("");
   const [flag, setFlag] = useState<"" | "anomalies" | "recurring" | "impulse" | "review">("");
+  const [direction, setDirection] = useState<"" | "debit" | "credit">("");
+  const [channel, setChannel] = useState("");
   const [page, setPage] = useState(1);
   const [adding, setAdding] = useState(false);
   const [drag, setDrag] = useState(false);
@@ -155,6 +179,8 @@ export default function Transactions() {
   if (category) params.set("category", category);
   if (source) params.set("source", source);
   if (flag) params.set(flag, "true");
+  if (direction) params.set("direction", direction);
+  if (channel) params.set("channel", channel);
   const { data, isLoading } = useQuery({
     queryKey: ["transactions", params.toString()],
     queryFn: () => api.get<Page>(`/transactions?${params}`),
@@ -299,8 +325,8 @@ export default function Transactions() {
       {uploadErr && <ImportError err={uploadErr} onClose={() => setUploadErr(null)} />}
 
       <Card className="mb-4 p-3">
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-[1fr_180px_160px_auto]">
-          <div className="relative">
+        <div className="flex flex-wrap gap-2 [&>select]:w-full [&>select]:sm:w-[160px]">
+          <div className="relative min-w-[220px] flex-1">
             <Search className="absolute left-3 top-3 size-4 text-muted" />
             <Input className="pl-9" placeholder="Search merchant or description…" value={q} onChange={(e) => (setQ(e.target.value), setPage(1))} />
           </div>
@@ -320,6 +346,31 @@ export default function Transactions() {
               </option>
             ))}
           </Select>
+          <Select value={channel} onChange={(e) => (setChannel(e.target.value), setPage(1))} aria-label="Payment channel">
+            <option value="">Any channel</option>
+            {Object.entries(CHANNELS).map(([k, v]) => (
+              <option key={k} value={k}>
+                {v}
+              </option>
+            ))}
+          </Select>
+          <div className="flex h-10 shrink-0 overflow-hidden rounded-xl border border-line text-[12.5px]" role="group" aria-label="Debit or credit">
+            {(
+              [
+                ["", "All"],
+                ["debit", "Debits"],
+                ["credit", "Credits"],
+              ] as const
+            ).map(([k, label]) => (
+              <button
+                key={k || "all"}
+                onClick={() => (setDirection(k), setPage(1))}
+                className={cn("px-3 transition", direction === k ? "bg-brand text-white" : "bg-surface-2/60 text-muted hover:text-ink")}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <div className="flex gap-1">
             {(
               [
@@ -337,6 +388,22 @@ export default function Transactions() {
           </div>
         </div>
       </Card>
+
+      {data?.totals && (
+        <div className="mb-3 flex flex-wrap items-center gap-x-5 gap-y-1 px-1 text-[12.5px] text-muted">
+          <span>
+            <b className="text-ink">{data.total.toLocaleString()}</b> transactions
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <ArrowUpRight className="size-3.5 text-red-500" /> {data.totals.debit_count} debits ·{" "}
+            <b className="num text-ink">{money(data.totals.debits)}</b> out
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <ArrowDownLeft className="size-3.5 text-emerald-500" /> {data.totals.credit_count} credits ·{" "}
+            <b className="num text-ink">{money(data.totals.credits)}</b> in
+          </span>
+        </div>
+      )}
 
       <Card className="overflow-hidden">
         {isLoading ? (
@@ -356,6 +423,7 @@ export default function Transactions() {
                 <tr>
                   <th className="px-4 py-2.5 font-medium">Date</th>
                   <th className="font-medium">Merchant</th>
+                  <th className="font-medium">Type</th>
                   <th className="font-medium">Category</th>
                   <th className="font-medium">How</th>
                   <th className="pr-4 text-right font-medium">Amount</th>
@@ -381,6 +449,15 @@ export default function Transactions() {
                       </div>
                       <div className="truncate text-[11.5px] text-muted" title={t.description}>
                         {t.description}
+                      </div>
+                    </td>
+                    <td className="whitespace-nowrap py-2.5">
+                      <Badge tone={t.direction === "credit" ? "green" : "red"} title={t.direction === "credit" ? "Money in" : "Money out"}>
+                        {t.direction === "credit" ? <ArrowDownLeft className="size-3" /> : <ArrowUpRight className="size-3" />}
+                        {t.direction === "credit" ? "Credit" : "Debit"}
+                      </Badge>
+                      <div className="mt-0.5 text-[11px] text-muted" title={t.channel_label}>
+                        {CHANNELS[t.channel] ?? t.channel}
                       </div>
                     </td>
                     <td className="py-2.5">

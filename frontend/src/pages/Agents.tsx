@@ -90,22 +90,41 @@ export default function Agents() {
     <div className="space-y-6">
       <PageHeader
         title="Agents & decision trail"
-        subtitle="A LangGraph coordinator routes work between specialist agents; every step, LLM call, Jev decision and output is recorded."
+        subtitle="A LangGraph coordinator runs categorize → analyze → forecast → advise → audit; a second team answers chat questions. Every step, model call and output is recorded."
       />
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {meta?.agents.map((a) => (
-          <Card key={a.id} className="p-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 font-semibold">
-                {a.id === "coordinator" ? <GitBranch className="size-4 text-brand" /> : <Bot className="size-4 text-brand" />}
-                {a.name}
-              </div>
-              <ModelBadge model={a.model} />
+      {(
+        [
+          ["pipeline", "Analysis pipeline", "Runs on every upload, nightly and before each scheduled digest"],
+          ["chat", "Ask FinPilot team", "Answers free-form questions from your own data"],
+        ] as const
+      ).map(([group, title, subtitle]) => {
+        const cards = (meta?.agents ?? []).filter((a) => (a.group ?? "pipeline") === group);
+        if (!cards.length) return null;
+        return (
+          <section key={group}>
+            <div className="mb-2 flex items-baseline gap-2">
+              <h2 className="text-[15px] font-semibold">{title}</h2>
+              <span className="text-[12.5px] text-muted">{subtitle}</span>
             </div>
-            <p className="mt-2 text-[12.5px] leading-relaxed text-muted">{a.role}</p>
-          </Card>
-        ))}
-      </div>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              {cards.map((a) => (
+                <Card key={a.id} className="p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
+                    <div className="flex min-w-0 items-center gap-2 font-semibold">
+                      {a.id === "coordinator" ? <GitBranch className="size-4 shrink-0 text-brand" /> : <Bot className="size-4 shrink-0 text-brand" />}
+                      <span className="truncate">{a.name}</span>
+                    </div>
+                    <span className="max-w-full truncate">
+                      <ModelBadge model={a.model} />
+                    </span>
+                  </div>
+                  <p className="mt-2 text-[12.5px] leading-relaxed text-muted">{a.role}</p>
+                </Card>
+              ))}
+            </div>
+          </section>
+        );
+      })}
 
       <div className="grid gap-6 xl:grid-cols-[340px_1fr]">
         <Card>

@@ -34,10 +34,13 @@ def test_run_records_decision_trail(client):
     runs = client.get("/api/runs").json()["runs"]
     detail = client.get(f"/api/runs/{runs[0]['id']}").json()["run"]
     agents = [s["agent"] for s in detail["steps"]]
-    assert agents == ["coordinator", "categorizer", "analyzer", "forecaster", "advisor"]
+    assert agents == ["coordinator", "categorizer", "analyzer", "forecaster", "advisor", "auditor"]
+    audit = detail["steps"][-1]["details"]
+    assert audit["checked"] > 0 and audit["failed"] == 0, audit
     rec = client.get("/api/recommendations").json()["recommendations"][0]
     full = client.get(f"/api/recommendations/{rec['id']}").json()
     assert full["recommendation"]["trigger"] and full["recommendation"]["reasoning"]
+    assert full["recommendation"]["reasoning"][-1].startswith("Audit passed")
     assert full["run"]["id"] == rec["run_id"]
 
 

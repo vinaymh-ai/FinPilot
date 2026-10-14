@@ -24,6 +24,7 @@ from sqlalchemy import (
     Text,
     Time,
     UniqueConstraint,
+    event,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -120,6 +121,11 @@ class Transaction(TimestampMixin, Base):
     amount: Mapped[float] = mapped_column(Money)
     account: Mapped[str | None] = mapped_column(String(64))
     fingerprint: Mapped[str] = mapped_column(String(64))
+    # Debit (money out) or credit (money in), and the payment rail read from the narration
+    # (upi | card | netbanking | neft | imps | rtgs | atm | auto_debit | cheque | ...). Both are
+    # filled automatically on insert/update, so every import path and agent sees them.
+    direction: Mapped[str | None] = mapped_column(String(8), index=True)
+    channel: Mapped[str | None] = mapped_column(String(16))
 
     category: Mapped[str | None] = mapped_column(String(48), index=True)
     category_source: Mapped[str | None] = mapped_column(
@@ -384,6 +390,8 @@ class ChatMessage(TimestampMixin, Base):
     route: Mapped[dict[str, Any] | None] = mapped_column(
         JSON
     )  # System One routing decision (assistant turns)
+    artifacts: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON)  # exact tables / charts
+    meta: Mapped[dict[str, Any] | None] = mapped_column(JSON)  # model, agent pipeline, analyst/planner info
 
 
 class AppSetting(Base):
@@ -391,3 +399,22 @@ class AppSetting(Base):
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[Any] = mapped_column(JSON)
+
+
+@event.listens_for(Transaction, "before_insert")
+@event.listens_for(Transaction, "before_update")
+def _derive_transaction_metadata(_mapper: Any, _connection: Any, target: Transaction) -> None:
+    """Keep direction (debit/credit) and payment channel consistent with amount and narration."""
+    from finpilot.domain.normalize import detect_channel, direction_of
+
+    if target.amount is not None:
+        target.direction = direction_of(float(target.amount))
+    if target.description is not None and (target.channel is None or _changed(target, "description")):
+        target.channel = detect_channel(target.description)
+
+
+def _changed(target: Any, attr: str) -> bool:
+    from sqlalchemy import inspect as sa_inspect
+
+    state = sa_inspect(target)
+    return bool(state.attrs[attr].history.has_changes()) if state.persistent else False
