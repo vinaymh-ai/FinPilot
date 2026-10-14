@@ -40,9 +40,9 @@ AGENT_CARDS = [
         "id": "categorizer",
         "name": "Categorizer",
         "group": "pipeline",
-        "role": "Memory → lexicon → keyword phrases → person-to-person detection → one LLM decision per uncertain "
-        "merchant → merchant consistency. Every label keeps its source, confidence and reason; debit/credit "
-        "direction and payment channel are recorded for each transaction",
+        "role": "Your rules → your corrections → lexicon → keyword phrases → person-to-person detection → one LLM "
+        "decision per uncertain merchant (with your custom categories and conventions as examples) → merchant "
+        "consistency. Every label keeps its source, confidence and reason, and every change is logged",
     },
     {
         "id": "analyzer",
@@ -80,6 +80,15 @@ AGENT_CARDS = [
         "role": "Scheduled weekly digest (APScheduler): one key insight + one action, by email / Telegram / in-app",
     },
     {
+        "id": "memory",
+        "name": "Memory",
+        "group": "chat",
+        "model_agent": None,
+        "model_label": "conversation + long-term",
+        "role": "Remembers each conversation (who and what “the same person”, “and in August?” refer to, open "
+        "questions) and what you taught it (aliases, “X is my landlord”); recaps chats; confirms recategorisations",
+    },
+    {
         "id": "chat_planner",
         "name": "Chat planner",
         "group": "chat",
@@ -92,8 +101,9 @@ AGENT_CARDS = [
         "name": "Retriever (RAG)",
         "group": "chat",
         "model_agent": None,
-        "model_label": "local BM25 + fuzzy",
-        "role": "Links your words to merchants and categories that exist in your data (typos included) and "
+        "model_label": "hybrid semantic",
+        "role": "Links your words to payees and categories in your data — spelling variants, meaning (“coffee” → "
+        "Starbucks) via sparse vectors + merchant enrichment, optional dense embeddings fused by RRF — and "
         "retrieves relevant insights, recommendations and goals",
     },
     {
@@ -131,6 +141,7 @@ def health(db: Session = Depends(get_db)) -> dict[str, Any]:
 @router.get("/meta")
 def meta(uid: int = Depends(current_user_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     user = repo.get_or_create_user(db, uid)
+    repo.custom_categories(db, uid)
     r = get_router()
     cards = []
     for c in AGENT_CARDS:
@@ -147,7 +158,7 @@ def meta(uid: int = Depends(current_user_id), db: Session = Depends(get_db)) -> 
         "version": __version__,
         "currency": user.currency,
         "user": {"id": user.id, "name": user.name},
-        "categories": as_dicts(),
+        "categories": as_dicts(uid),
         "agents": cards,
         "llm_enabled": r.enabled,
         "decisions": get_jev().describe(),

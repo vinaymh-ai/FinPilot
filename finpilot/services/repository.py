@@ -18,6 +18,9 @@ from finpilot.domain.recurring import RecurringCandidate, TxnLite
 from finpilot.models import (
     AgentRun,
     AppSetting,
+    CategoryEvent,
+    CategoryRule,
+    CustomCategory,
     Forecast,
     Goal,
     ImportBatch,
@@ -325,7 +328,41 @@ def save_merchant_profiles(session: Session, user_id: int, profiles: list[Any]) 
     return len(profiles)
 
 
-def remember_correction(session: Session, user_id: int, merchant: str, category: str) -> int:
+def set_category(
+    session: Session,
+    t: Transaction,
+    category: str,
+    *,
+    source: str,
+    confidence: float,
+    reason: str,
+    actor: str,
+    run_id: int | None = None,
+) -> bool:
+    """Change one transaction's category and record the change in the audit trail."""
+    changed = t.category != category or t.category_source != source
+    if changed and t.id is not None:
+        session.add(
+            CategoryEvent(
+                user_id=t.user_id,
+                transaction_id=t.id,
+                run_id=run_id,
+                actor=actor,
+                old_category=t.category,
+                new_category=category,
+                source=source,
+                confidence=confidence,
+                reason=(reason or "")[:500],
+            )
+        )
+    t.category, t.category_source = category, source
+    t.category_confidence, t.category_reason = confidence, (reason or "")[:500]
+    return changed
+
+
+def remember_correction(
+    session: Session, user_id: int, merchant: str, category: str, *, actor: str = "user"
+) -> int:
     """Store a user correction and apply it to all transactions from the same merchant."""
     key = merchant.upper()
     if payment_provider(merchant):
@@ -339,17 +376,117 @@ def remember_correction(session: Session, user_id: int, merchant: str, category:
         session.add(MerchantMemory(user_id=user_id, merchant_key=key, category=category, hits=1))
     else:
         row.category, row.hits = category, row.hits + 1
-    res = session.execute(
-        update(Transaction)
-        .where(Transaction.user_id == user_id, Transaction.merchant == merchant)
-        .values(
-            category=category,
-            category_source="user",
-            category_confidence=1.0,
-            category_reason="Corrected by you",
-        )
+    rows = session.scalars(
+        select(Transaction).where(Transaction.user_id == user_id, Transaction.merchant == merchant)
     )
-    return res.rowcount or 0
+    n = 0
+    for t in rows:
+        set_category(
+            session,
+            t,
+            category,
+            source="user",
+            confidence=1.0,
+            reason="Corrected by you" if actor == "user" else "Categorised by you in chat",
+            actor=actor,
+        )
+        n += 1
+    return n
+
+
+# ---------------------------------------------------------------------------- user rules
+def user_rules(session: Session, user_id: int) -> list[Any]:
+    from finpilot.domain.rules import UserRule
+
+    return [
+        UserRule.from_row(r)
+        for r in session.scalars(
+            select(CategoryRule)
+            .where(CategoryRule.user_id == user_id, CategoryRule.enabled.is_not(False))
+            .order_by(CategoryRule.priority, CategoryRule.id)
+        )
+    ]
+
+
+def rule_matches(session: Session, user_id: int, rule: Any) -> list[Transaction]:
+    from finpilot.domain.normalize import detect_channel
+
+    return [
+        t
+        for t in load_transactions(session, user_id)
+        if rule.matches(
+            description=t.description,
+            merchant=t.merchant,
+            amount=float(t.amount),
+            channel=t.channel or detect_channel(t.description),
+        )
+    ]
+
+
+def apply_rule(
+    session: Session, user_id: int, rule: Any, *, include_manual: bool = False, actor: str = "rule"
+) -> int:
+    """Apply a rule to existing transactions. Single-transaction manual edits are kept by default."""
+    from finpilot.domain.taxonomy import label
+
+    n = 0
+    for t in rule_matches(session, user_id, rule):
+        if t.category_source == "user" and not include_manual:
+            continue
+        if set_category(
+            session,
+            t,
+            rule.category,
+            source="user_rule",
+            confidence=0.99,
+            reason=f"Your rule: {rule.describe(label(rule.category))}",
+            actor=actor,
+        ):
+            n += 1
+    row = session.get(CategoryRule, rule.id)
+    if row is not None:
+        row.hits = (row.hits or 0) + n
+    return n
+
+
+def correction_conventions(session: Session, user_id: int, limit: int = 20) -> list[dict[str, str]]:
+    """The user's own labelling, as few-shot examples for the categorizer's model stage."""
+    from finpilot.domain.taxonomy import BY_ID, label
+
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    memory = merchant_memory(session, user_id)
+    rows = session.scalars(
+        select(Transaction)
+        .where(Transaction.user_id == user_id, Transaction.category_source.in_(("user", "user_rule")))
+        .order_by(Transaction.id.desc())
+        .limit(400)
+    )
+    for t in rows:
+        if t.merchant.upper() in seen or t.category not in BY_ID:
+            continue
+        seen.add(t.merchant.upper())
+        out.append(
+            {
+                "payee": t.merchant,
+                "example": t.description[:120],
+                "direction": "credit" if t.amount > 0 else "debit",
+                "category": t.category,
+                "label": label(t.category),
+            }
+        )
+        if len(out) >= limit:
+            return out
+    for merchant, cat in memory.items():
+        if merchant not in seen and cat in BY_ID and len(out) < limit:
+            out.append({"payee": merchant.title(), "category": cat, "label": label(cat)})
+    return out
+
+
+def custom_categories(session: Session, user_id: int) -> list[Any]:
+    from finpilot.domain import taxonomy
+
+    return taxonomy.load_custom(session, user_id)
 
 
 def input_signature(session: Session, user_id: int) -> str:
@@ -467,7 +604,12 @@ def put_setting(session: Session, key: str, value: Any) -> None:
 
 
 def wipe_user_data(session: Session, user_id: int) -> None:
+    from finpilot.domain import taxonomy
+
     for model in (
+        CategoryEvent,
+        CategoryRule,
+        CustomCategory,
         Recommendation,
         Insight,
         Forecast,
@@ -479,3 +621,4 @@ def wipe_user_data(session: Session, user_id: int) -> None:
         Goal,
     ):
         session.execute(delete(model).where(model.user_id == user_id))
+    taxonomy.register([], user_id=user_id)

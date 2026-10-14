@@ -64,6 +64,8 @@ def init_db() -> None:
     _ensure_indexes(engine)
     _backfill(engine, added)
     _backfill_transaction_metadata(engine)
+    _backfill_chat_sessions(engine)
+    _load_custom_categories()
 
 
 def _add_missing_columns(engine: Engine) -> list[str]:
@@ -148,6 +150,64 @@ def _backfill_transaction_metadata(engine: Engine) -> None:
             log.info("derived direction and channel for %s existing transactions", len(rows))
     except Exception:  # noqa: BLE001 - best effort; never block startup
         log.warning("transaction metadata backfill failed", exc_info=True)
+
+
+def _backfill_chat_sessions(engine: Engine) -> None:
+    """Give conversations recorded before chat threads existed a session row and a title."""
+    from sqlalchemy import func, select
+
+    from finpilot.models import ChatMessage, ChatSession
+
+    try:
+        with Session(engine) as s:
+            known = set(s.execute(select(ChatSession.user_id, ChatSession.session_id)).tuples())
+            rows = s.execute(
+                select(
+                    ChatMessage.session_id,
+                    ChatMessage.user_id,
+                    func.count(),
+                    func.min(ChatMessage.created_at),
+                    func.max(ChatMessage.created_at),
+                ).group_by(ChatMessage.session_id, ChatMessage.user_id)
+            ).all()
+            for sid, uid, n, first, last in rows:
+                if (uid, sid) in known:
+                    continue
+                q = s.scalar(
+                    select(ChatMessage.content)
+                    .where(
+                        ChatMessage.session_id == sid, ChatMessage.user_id == uid, ChatMessage.role == "user"
+                    )
+                    .order_by(ChatMessage.id)
+                    .limit(1)
+                )
+                from finpilot.agents.memory import title_from_question
+
+                s.add(
+                    ChatSession(
+                        session_id=sid,
+                        user_id=uid,
+                        title=title_from_question(q or "Conversation"),
+                        title_source="auto",
+                        message_count=n,
+                        created_at=first,
+                        updated_at=last,
+                    )
+                )
+                known.add((uid, sid))
+            s.commit()
+    except Exception:  # noqa: BLE001 - best effort; never block startup
+        log.warning("chat session backfill failed", exc_info=True)
+
+
+def _load_custom_categories() -> None:
+    from finpilot.domain import taxonomy
+
+    try:
+        with new_session() as s:
+            taxonomy.load_custom(s)
+    except Exception:  # noqa: BLE001 - best effort; never block startup
+        log.warning("could not load custom categories", exc_info=True)
 
 
 def new_session() -> Session:

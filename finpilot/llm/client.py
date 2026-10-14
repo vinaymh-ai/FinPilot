@@ -385,6 +385,48 @@ class LLMRouter:
             raw=_dump(completion),
         )
 
+    # ----------------------------------------------------------------------------- embeddings
+    def embeddings_available(self) -> bool:
+        return self.enabled and bool(self.settings.embedding_model) and bool(self.targets("chat"))
+
+    def embed(self, texts: list[str], *, agent: str = "retriever") -> list[list[float]]:
+        """Dense vectors for `texts` from the configured embedding model (cached per text)."""
+        model = self.settings.embedding_model
+        targets = self.targets("chat") if self.enabled else []
+        if not model or not targets or not texts:
+            raise LLMUnavailableError("no embedding model configured")
+        spec = targets[0][0]
+        keys = [hashlib.sha256(f"emb|{spec.name}|{model}|{t}".encode()).hexdigest() for t in texts]
+        out: list[list[float] | None] = []
+        for k in keys:
+            hit = self._cache_get(k) if self.settings.llm_cache_enabled else None
+            out.append(json.loads(hit) if hit else None)
+        missing = [i for i, v in enumerate(out) if v is None]
+        if missing:
+            started = time.perf_counter()
+            try:
+                resp = self._client(spec).embeddings.create(model=model, input=[texts[i] for i in missing])
+            except Exception as exc:  # noqa: BLE001 - surfaced as LLMError, callers fall back
+                raise LLMError(f"embedding call failed: {exc}") from exc
+            vectors = [d.embedding for d in sorted(resp.data, key=lambda d: d.index)]
+            tokens = getattr(getattr(resp, "usage", None), "prompt_tokens", 0) or 0
+            self._record(
+                agent,
+                LLMResponse(
+                    content=None,
+                    provider=spec.name,
+                    model=model,
+                    prompt_tokens=tokens,
+                    latency_ms=int((time.perf_counter() - started) * 1000),
+                ),
+                success=True,
+            )
+            for i, vec in zip(missing, vectors, strict=True):
+                out[i] = vec
+                if self.settings.llm_cache_enabled:
+                    self._cache_put(keys[i], model, json.dumps(vec))
+        return [v or [] for v in out]
+
     # ----------------------------------------------------------------------------- cache/telemetry
     @staticmethod
     def _cache_key(

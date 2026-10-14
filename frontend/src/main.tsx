@@ -17,6 +17,7 @@ const Goals = lazyWithRetry(() => import("./pages/Goals"));
 const Insights = lazyWithRetry(() => import("./pages/Insights"));
 const Transactions = lazyWithRetry(() => import("./pages/Transactions"));
 const Chat = lazyWithRetry(() => import("./pages/Chat"));
+const Categories = lazyWithRetry(() => import("./pages/Categories"));
 const Digests = lazyWithRetry(() => import("./pages/Digests"));
 const Agents = lazyWithRetry(() => import("./pages/Agents"));
 const Decisions = lazyWithRetry(() => import("./pages/Decisions"));
@@ -107,6 +108,8 @@ function AppRoutes() {
             <Route path="/insights" element={<Insights />} />
             <Route path="/transactions" element={<Transactions />} />
             <Route path="/chat" element={<Chat />} />
+            <Route path="/chat/:sessionId" element={<Chat />} />
+            <Route path="/categories" element={<Categories />} />
             <Route path="/digests" element={<Digests />} />
             <Route path="/agents" element={<Agents />} />
             <Route path="/decisions" element={<Decisions />} />

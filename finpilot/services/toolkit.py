@@ -23,7 +23,7 @@ from finpilot.domain.money import format_money
 from finpilot.domain.normalize import merchant_matches, normalize_text
 from finpilot.domain.recurring import monthly_equivalent
 from finpilot.domain.stats import add_months, month_key
-from finpilot.domain.taxonomy import BY_ID, CATEGORIES, NON_SPEND, is_spending_flow, label
+from finpilot.domain.taxonomy import BY_ID, CATEGORIES, NON_SPEND, custom_for, is_spending_flow, label
 from finpilot.services import repository as repo
 
 SYNONYMS = {
@@ -74,12 +74,15 @@ SYNONYMS = {
 }
 
 
-def resolve_categories(text: str | None) -> list[str]:
+def resolve_categories(text: str | None, user_id: int | None = None) -> list[str]:
     if not text:
         return []
     t = text.strip().lower()
     if t in BY_ID:
         return [t]
+    for c in custom_for(user_id):  # the user's own categories, by name
+        if t in (c.label.lower(), c.label.lower().replace("&", "and")):
+            return [c.id]
     if t in SYNONYMS:
         return SYNONYMS[t]
     for c in CATEGORIES:
@@ -97,6 +100,7 @@ class FinanceToolkit:
         self.user_id = user_id
         self.user = repo.get_or_create_user(session, user_id)
         self.currency = self.user.currency or get_settings().currency
+        self.custom_categories = repo.custom_categories(session, user_id)
 
     # ------------------------------------------------------------------ cached data
     @cached_property
@@ -265,7 +269,7 @@ class FinanceToolkit:
         end_date: str | None = None,
     ) -> dict[str, Any]:
         s, e, desc = self.period_range(period, start_date, end_date)
-        cats = resolve_categories(category)
+        cats = resolve_categories(category, self.user_id)
         if category and not cats:
             raise ValueError(f"Unknown category: {category}")
         m_q = (merchant or "").strip()
@@ -379,7 +383,7 @@ class FinanceToolkit:
         start_date: str | None = None,
         end_date: str | None = None,
     ) -> dict[str, Any]:
-        cats = resolve_categories(category)
+        cats = resolve_categories(category, self.user_id)
         if category and not cats:
             raise ValueError(f"Unknown category: {category}")
         if min_amount is not None and (not math.isfinite(min_amount) or min_amount < 0):
@@ -628,6 +632,41 @@ class FinanceToolkit:
         }
 
     # ------------------------------------------------------------------ dispatch
+    def find_payees(self, description: str, limit: int = 8) -> dict[str, Any]:
+        """Semantic search over payees by meaning or approximate name ("coffee places", "hanumantha")."""
+        from finpilot.services.retrieval import LedgerRetriever
+
+        if not isinstance(description, str) or not description.strip():
+            raise ValueError("description must be a non-empty string")
+        retriever = LedgerRetriever(self)
+        k = max(1, min(int(limit or 8), 15))
+        hits = retriever.semantic_search(description[:200], k=k)
+        names = [m["merchant"] for m in retriever.match_merchants(description, k=k, min_score=0.84)]
+        by_name = {h["merchant"]: h for h in hits}
+        hits = [
+            *(by_name.get(n) or {"merchant": n, "score": 1.0, "retrieval": "name match"} for n in names),
+            *(h for h in hits if h["merchant"] not in names),
+        ]  # exact / spelling matches first
+        out = []
+        for h in hits[:k]:
+            m = retriever.merchants[h["merchant"]]
+            out.append(
+                {
+                    "merchant": h["merchant"],
+                    "about": h.get("about"),
+                    "category": label(
+                        h.get("category") or (m.categories.most_common(1)[0][0] if m.categories else None)
+                    ),
+                    "transactions": m.count,
+                    "debits": round(m.debit_total, 2),
+                    "credits": round(m.credit_total, 2),
+                    "spellings": retriever.variants(h["merchant"]),
+                    "score": h.get("score"),
+                }
+            )
+        mode = hits[0]["retrieval"] if hits else "none"
+        return {"query": description, "payees": out, "retrieval": mode}
+
     def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         fn = getattr(self, name, None)
         if name not in TOOL_NAMES or fn is None:
@@ -725,6 +764,14 @@ TOOL_SPECS: list[dict[str, Any]] = [
             }
         },
         ["question"],
+    ),
+    _tool(
+        "find_payees",
+        "Semantic search over the user's payees by meaning or approximate spelling ('coffee places', 'my gym', "
+        "'medicines', 'hanumantha'). Returns matching payees with totals and their other spellings; follow up "
+        "with query_ledger or get_spending using an exact payee name.",
+        {"description": {"type": "string"}, "limit": {"type": "integer"}},
+        ["description"],
     ),
     _tool(
         "rank_spending",

@@ -1,13 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDownLeft, ArrowUpRight, CheckCircle2, ChevronLeft, ChevronRight, FileUp, KeyRound, Plus, Receipt, Repeat, Search, TriangleAlert, Upload, X, Zap } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Check, CheckCircle2, ChevronLeft, ChevronRight, FileUp, History, KeyRound, Plus, Receipt, Repeat, Search, TriangleAlert, Upload, Wand2, X, Zap } from "lucide-react";
 import { useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { CategoryPill, SourceBadge } from "../components/domain";
 import { Badge, Button, Card, Drawer, Empty, Input, Label, PageHeader, Select, Skeleton, Toggle } from "../components/ui";
 import { ApiError, api } from "../lib/api";
 import { cn, date, money } from "../lib/format";
 import { useMeta, useRefreshAll } from "../lib/hooks";
-import type { Txn } from "../lib/types";
+import type { CategoryEvent, Txn } from "../lib/types";
+import { EMPTY_RULE, RuleDrawer, type RuleDraft } from "./Categories";
 
 type Page = {
   total: number;
@@ -155,14 +157,92 @@ function ImportError({ err, onClose }: { err: UploadError; onClose: () => void }
   );
 }
 
+const ACTOR: Record<string, string> = {
+  categorizer: "Categorizer agent",
+  user: "You",
+  review: "You (review)",
+  rule: "Your rule",
+  chat: "You, in chat",
+};
+
+function HistoryDrawer({ txn, onClose, onRule }: { txn: Txn | null; onClose: () => void; onRule: (t: Txn) => void }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ["txn-history", txn?.id],
+    queryFn: () => api.get<{ events: CategoryEvent[] }>(`/transactions/${txn!.id}/history`),
+    enabled: !!txn,
+  });
+  if (!txn) return null;
+  return (
+    <Drawer open={!!txn} onClose={onClose} title={<span className="inline-flex items-center gap-2"><History className="size-4" /> Category history</span>}>
+      <div className="space-y-4">
+        <div>
+          <div className="font-medium">{txn.merchant}</div>
+          <div className="break-all text-[12px] text-muted">{txn.description}</div>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-[12.5px]">
+            <span className={cn("num font-medium", txn.amount > 0 && "text-emerald-500")}>{money(txn.amount, { sign: true })}</span>
+            <span className="text-muted">{date(txn.date)}</span>
+            <CategoryPill id={txn.category} label={txn.category_label} />
+          </div>
+          {txn.category_reason && <p className="mt-2 rounded-xl bg-surface-2/60 p-2.5 text-[12.5px]">{txn.category_reason}</p>}
+        </div>
+        {isLoading ? (
+          <Skeleton className="h-24" />
+        ) : !data?.events.length ? (
+          <p className="text-[12.5px] text-muted">No recorded changes yet — this label predates the audit trail.</p>
+        ) : (
+          <ol className="relative space-y-3 border-l border-line pl-4">
+            {data.events.map((e) => (
+              <li key={e.id} className="text-[12.5px]">
+                <span className="absolute -left-[5px] mt-1.5 size-2.5 rounded-full bg-brand" />
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <b>{ACTOR[e.actor] ?? e.actor}</b>
+                  {e.from_label ? (
+                    <>
+                      <span className="text-muted">changed</span> {e.from_label} <span className="text-muted">→</span>
+                    </>
+                  ) : (
+                    <span className="text-muted">set</span>
+                  )}
+                  <b>{e.to_label}</b>
+                  {e.source && <Badge>{e.source}</Badge>}
+                  {e.confidence != null && <span className="text-muted">{Math.round(e.confidence * 100)}%</span>}
+                </div>
+                {e.reason && <div className="mt-0.5 text-muted">{e.reason}</div>}
+                <div className="mt-0.5 text-[11px] text-muted">
+                  {e.at ? new Date(e.at.endsWith("Z") || e.at.includes("+") ? e.at : e.at + "Z").toLocaleString() : ""}
+                  {e.run_id ? ` · run #${e.run_id}` : ""}
+                </div>
+              </li>
+            ))}
+          </ol>
+        )}
+        <Button onClick={() => onRule(txn)}>
+          <Wand2 className="size-4" /> Make a rule for “{txn.merchant}”
+        </Button>
+      </div>
+    </Drawer>
+  );
+}
+
+const FLAGS = ["anomalies", "recurring", "impulse", "review"] as const;
+
 export default function Transactions() {
   const { data: meta } = useMeta();
   const qc = useQueryClient();
   const refresh = useRefreshAll();
-  const [q, setQ] = useState("");
-  const [category, setCategory] = useState("");
+  const [params0] = useSearchParams();
+  const [q, setQ] = useState(params0.get("q") ?? "");
+  const [category, setCategory] = useState(params0.get("category") ?? "");
   const [source, setSource] = useState("");
-  const [flag, setFlag] = useState<"" | "anomalies" | "recurring" | "impulse" | "review">("");
+  const initialFlag = params0.get("flag");
+  const [flag, setFlag] = useState<"" | "anomalies" | "recurring" | "impulse" | "review">(
+    FLAGS.includes(initialFlag as (typeof FLAGS)[number]) ? (initialFlag as (typeof FLAGS)[number]) : "",
+  );
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulkCategory, setBulkCategory] = useState("");
+  const [remember, setRemember] = useState(false);
+  const [historyOf, setHistoryOf] = useState<Txn | null>(null);
+  const [ruleDraft, setRuleDraft] = useState<RuleDraft | null>(null);
   const [direction, setDirection] = useState<"" | "debit" | "credit">("");
   const [channel, setChannel] = useState("");
   const [page, setPage] = useState(1);
@@ -232,6 +312,31 @@ export default function Transactions() {
     },
   });
 
+  const bulk = useMutation({
+    mutationFn: (body: { ids: number[]; category?: string; approve?: boolean; remember?: boolean }) =>
+      api.post<{ updated: number; changed: number; learned_merchants: number; not_learned?: string[] }>("/transactions/bulk", body),
+    onSuccess: (r, v) => {
+      const skipped = r.not_learned?.length
+        ? ` Not remembered (your selected rows had different categories): ${r.not_learned.join(", ")}.`
+        : "";
+      toast.success(v.approve ? `Approved ${r.updated} transaction(s)` : `Moved ${r.updated} transaction(s)`, {
+        description: (r.learned_merchants ? `Learned ${r.learned_merchants} merchant(s) for future imports.` : "Logged in each transaction's history.") + skipped,
+      });
+      setSelected(new Set());
+      qc.invalidateQueries({ queryKey: ["transactions"] });
+      qc.invalidateQueries({ queryKey: ["categories"] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const pageIds = data?.items.map((t) => t.id) ?? [];
+  const allOnPage = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
+  const toggle = (id: number) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   const onFiles = (files: FileList | null) => {
     const f = files?.[0];
     if (!f) return;
@@ -405,6 +510,34 @@ export default function Transactions() {
         </div>
       )}
 
+      {selected.size > 0 && (
+        <Card className="sticky top-2 z-20 mb-3 flex flex-wrap items-center gap-2 border-brand/40 p-2.5 text-[13px] shadow-lg">
+          <b className="px-1">{selected.size} selected</b>
+          <Button size="sm" variant="primary" loading={bulk.isPending && !bulkCategory} onClick={() => bulk.mutate({ ids: [...selected], approve: true, remember })}>
+            <Check className="size-3.5" /> Approve categories
+          </Button>
+          <div className="flex items-center gap-1.5">
+            <Select className="h-8 w-[190px] text-[12.5px]" value={bulkCategory} onChange={(e) => setBulkCategory(e.target.value)} aria-label="Move to category">
+              <option value="">Move to category…</option>
+              {meta?.categories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.label}
+                </option>
+              ))}
+            </Select>
+            <Button size="sm" disabled={!bulkCategory} loading={bulk.isPending && !!bulkCategory} onClick={() => bulk.mutate({ ids: [...selected], category: bulkCategory, remember })}>
+              Move
+            </Button>
+          </div>
+          <label className="flex cursor-pointer items-center gap-1.5 text-muted">
+            <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} className="accent-[var(--color-brand,#10b981)]" />
+            remember these merchants for future imports
+          </label>
+          <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setSelected(new Set())}>
+            <X className="size-3.5" /> Clear
+          </Button>
+        </Card>
+      )}
       <Card className="overflow-hidden">
         {isLoading ? (
           <div className="space-y-2 p-4">
@@ -421,7 +554,24 @@ export default function Transactions() {
             <table className="w-full min-w-[900px] text-[13px]">
               <thead className="bg-surface-2/60 text-left text-[12px] text-muted">
                 <tr>
-                  <th className="px-4 py-2.5 font-medium">Date</th>
+                  <th className="w-10 pl-4">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all on this page"
+                      checked={allOnPage}
+                      onChange={() =>
+                        setSelected((prev) => {
+                          const next = new Set(prev);
+                          for (const id of pageIds) {
+                            if (allOnPage) next.delete(id);
+                            else next.add(id);
+                          }
+                          return next;
+                        })
+                      }
+                    />
+                  </th>
+                  <th className="px-2 py-2.5 font-medium">Date</th>
                   <th className="font-medium">Merchant</th>
                   <th className="font-medium">Type</th>
                   <th className="font-medium">Category</th>
@@ -431,8 +581,11 @@ export default function Transactions() {
               </thead>
               <tbody>
                 {data.items.map((t) => (
-                  <tr key={t.id} className="border-t border-line hover:bg-surface-2/40">
-                    <td className="whitespace-nowrap px-4 py-2.5 text-muted">
+                  <tr key={t.id} className={cn("border-t border-line hover:bg-surface-2/40", selected.has(t.id) && "bg-brand/5")}>
+                    <td className="pl-4">
+                      <input type="checkbox" aria-label={`Select ${t.merchant}`} checked={selected.has(t.id)} onChange={() => toggle(t.id)} />
+                    </td>
+                    <td className="whitespace-nowrap px-2 py-2.5 text-muted">
                       {date(t.date)}
                       {t.time && <span className="ml-1 text-[11px] opacity-70">{t.time}</span>}
                     </td>
@@ -478,6 +631,9 @@ export default function Transactions() {
                       </div>
                     </td>
                     <td className="py-2.5">
+                      <button onClick={() => setHistoryOf(t)} className="mr-1 rounded p-0.5 align-middle text-muted hover:bg-surface-2 hover:text-ink" aria-label="Category history" title="Why this category? (history)">
+                        <History className="size-3.5" />
+                      </button>
                       <SourceBadge source={t.category_source} confidence={t.category_confidence} reason={t.category_reason} />
                       {t.needs_review && <Badge tone="amber" title={t.category_reason ?? undefined}>Needs review</Badge>}
                       <Badge>{t.transaction_kind.replace(/_/g, " ")}</Badge>
@@ -508,6 +664,15 @@ export default function Transactions() {
         )}
       </Card>
       <AddTxn open={adding} onClose={() => setAdding(false)} />
+      <HistoryDrawer
+        txn={historyOf}
+        onClose={() => setHistoryOf(null)}
+        onRule={(t) => {
+          setHistoryOf(null);
+          setRuleDraft({ ...EMPTY_RULE, terms: t.merchant.toUpperCase(), field: "merchant", category: t.category ?? "" });
+        }}
+      />
+      <RuleDrawer draft={ruleDraft} onClose={() => setRuleDraft(null)} categories={meta?.categories ?? []} />
     </div>
   );
 }

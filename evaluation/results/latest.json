@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-14 10:16",
+  "generated_at": "2026-10-14 13:29",
   "mode": "deterministic (no LLM)",
   "seeds": [
     1,
@@ -330,7 +330,7 @@
   },
   "forecast": {
     "origins": 42,
-    "seconds": 5.1,
+    "seconds": 6.0,
     "metric": "mean |predicted \u2212 actual net cash-flow| as % of monthly income",
     "horizons": {
       "30": {
@@ -833,6 +833,137 @@
         ]
       }
     ],
+    "conversations": {
+      "turns": 10,
+      "accuracy": 1.0,
+      "follow_up_accuracy": 1.0,
+      "results": [
+        {
+          "question": "How much did I spend on food delivery last month?",
+          "turn": 1,
+          "expected": 9931.85,
+          "got": 9931.85,
+          "ok": true,
+          "memory": "new",
+          "agents": [
+            "router",
+            "spending_tools"
+          ]
+        },
+        {
+          "question": "and in August?",
+          "turn": 2,
+          "expected": 8392.3,
+          "got": 8392.3,
+          "ok": true,
+          "memory": "ellipsis",
+          "agents": [
+            "memory",
+            "retriever",
+            "sql_analyst"
+          ]
+        },
+        {
+          "question": "what about dining?",
+          "turn": 3,
+          "expected": 4767.0,
+          "got": 4767.0,
+          "ok": true,
+          "memory": "ellipsis",
+          "agents": [
+            "memory",
+            "retriever",
+            "sql_analyst"
+          ]
+        },
+        {
+          "question": "How much did I pay Priya Nair in total?",
+          "turn": 1,
+          "expected": 14400,
+          "got": 14400.0,
+          "ok": true,
+          "memory": "new",
+          "agents": [
+            "router",
+            "spending_tools"
+          ]
+        },
+        {
+          "question": "how many times did I pay her?",
+          "turn": 2,
+          "expected": 8,
+          "got": 8.0,
+          "ok": true,
+          "memory": "follow_up",
+          "agents": [
+            "memory",
+            "retriever",
+            "sql_analyst"
+          ]
+        },
+        {
+          "question": "and in the last 3 months?",
+          "turn": 3,
+          "expected": 3,
+          "got": 3.0,
+          "ok": true,
+          "memory": "ellipsis",
+          "agents": [
+            "memory",
+            "retriever",
+            "sql_analyst"
+          ]
+        },
+        {
+          "question": "How many Uber transactions in the last 3 months?",
+          "turn": 1,
+          "expected": 16,
+          "got": 16.0,
+          "ok": true,
+          "memory": "new",
+          "agents": [
+            "retriever",
+            "sql_analyst"
+          ]
+        },
+        {
+          "question": "what about Ola?",
+          "turn": 2,
+          "expected": 8,
+          "got": 8.0,
+          "ok": true,
+          "memory": "ellipsis",
+          "agents": [
+            "memory",
+            "retriever",
+            "sql_analyst"
+          ]
+        },
+        {
+          "question": "How many credits did I receive?",
+          "turn": 1,
+          "expected": 19,
+          "got": 19.0,
+          "ok": true,
+          "memory": "new",
+          "agents": [
+            "retriever",
+            "sql_analyst"
+          ]
+        },
+        {
+          "question": "summarise our chat",
+          "turn": 2,
+          "expected": "memory",
+          "got": "memory",
+          "ok": true,
+          "memory": "handled",
+          "agents": [
+            "memory"
+          ]
+        }
+      ]
+    },
     "mode": "deterministic chat (no LLM): guardrails \u2192 retriever \u2192 SQL analyst / finance tools",
     "truth": "expected answers computed from the generator's ground-truth categories, merchants and times"
   },
@@ -847,7 +978,7 @@
     ],
     "category_accuracy": 0.98,
     "channel_accuracy": 0.99,
-    "confident_share": 0.87,
+    "confident_share": 0.88,
     "confident_precision": 1.0,
     "first_run": {
       "date": "2026-10-14",
@@ -878,14 +1009,44 @@
       }
     ]
   },
+  "narrations_2": {
+    "cases": 120,
+    "banks": [
+      "SBI",
+      "HDFC",
+      "ICICI",
+      "Axis",
+      "Kotak",
+      "PNB",
+      "BoB",
+      "Canara",
+      "Union",
+      "IDFC First",
+      "Yes"
+    ],
+    "category_accuracy": 1.0,
+    "channel_accuracy": 1.0,
+    "confident_share": 0.9583,
+    "confident_precision": 1.0,
+    "first_run": {
+      "date": "2026-10-14",
+      "category_accuracy": 0.85,
+      "channel_accuracy": 0.9651,
+      "confident_share": 0.808,
+      "confident_precision": 0.9691,
+      "misses": "no taxes category; bank-charge narrations; self-transfers; wallet loads; NPS/FD/RD/digital gold; EAW ATM code; BILLPAY to a masked card number"
+    },
+    "errors": [],
+    "channel_errors": []
+  },
   "jev": {
     "model": "typesafe/jev-1.13",
     "baselines": {
       "merchants": {
         "cases": 142,
-        "rules_unsure": 39,
-        "rules_accuracy_all": 0.7887,
-        "rules_accuracy_unsure": 0.3077
+        "rules_unsure": 34,
+        "rules_accuracy_all": 0.7958,
+        "rules_accuracy_unsure": 0.2353
       },
       "chat": {
         "cases": 62,
@@ -917,14 +1078,14 @@
     },
     "request_estimates": {
       "merchant_category": {
-        "estimated_input_tokens": 1105,
-        "jev_usd_per_1k_estimated": 0.0464,
-        "llm_usd_per_1k_estimated": 0.0411
+        "estimated_input_tokens": 1149,
+        "jev_usd_per_1k_estimated": 0.0483,
+        "llm_usd_per_1k_estimated": 0.0416
       },
       "chat_route": {
-        "estimated_input_tokens": 1220,
-        "jev_usd_per_1k_estimated": 0.0513,
-        "llm_usd_per_1k_estimated": 0.8529
+        "estimated_input_tokens": 1245,
+        "jev_usd_per_1k_estimated": 0.0523,
+        "llm_usd_per_1k_estimated": 0.8892
       },
       "faithfulness": {
         "estimated_input_tokens": 237,
@@ -943,5 +1104,5 @@
     "status": "pending \u2014 no Jev measurements in this run"
   },
   "llm_note": "Deterministic run: no LLM calls were made. Run `python -m evaluation.run_eval --llm` with MESH_API_KEY set to measure the LLM long-tail stage (row 4) on the same data.",
-  "runtime_seconds": 25.0
+  "runtime_seconds": 28.1
 }

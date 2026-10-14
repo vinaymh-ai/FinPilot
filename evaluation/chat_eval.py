@@ -190,6 +190,63 @@ def cases(today: dt.date) -> list[Case]:
     ]
 
 
+# Recorded the first time the multi-turn set ran, before any fix it motivated (kept for honesty).
+CONVERSATIONS_FIRST_RUN = {
+    "date": "2026-10-14",
+    "accuracy": 0.8,
+    "follow_up_accuracy": 0.6667,
+    "note": "ellipsis after a spending-tool answer had no structured focus to inherit",
+}
+
+
+def conversations(today: dt.date) -> list[list[Case]]:
+    """Multi-turn chats: later turns only make sense with the conversation's memory."""
+    last = _month(today, -1)
+    aug = _named_month(today, 8)
+    three = (add_months(today, -3) + dt.timedelta(days=1), today)
+
+    def T(q: str, expect: Callable[[list[Any]], Any] | None = None, kind: str = "number") -> Case:
+        return {"question": q, "expect": expect, "kind": kind, "index": 0}
+
+    def fd(rng: tuple[dt.date, dt.date], cat: str = "food_delivery") -> Callable[[list[Any]], float]:
+        return lambda T_: _sum([t for t in T_ if t.true_category == cat and t.amount < 0 and _in(t, rng)])
+
+    return [
+        [
+            T("How much did I spend on food delivery last month?", fd(last)),
+            T("and in August?", fd(aug)),
+            T("what about dining?", fd(aug, "dining")),
+        ],
+        [
+            T(
+                "How much did I pay Priya Nair in total?",
+                lambda T_: _sum([t for t in T_ if t.true_merchant == "Priya Nair" and t.amount < 0]),
+            ),
+            T(
+                "how many times did I pay her?",
+                lambda T_: sum(t.true_merchant == "Priya Nair" and t.amount < 0 for t in T_),
+            ),
+            T(
+                "and in the last 3 months?",
+                lambda T_: sum(
+                    t.true_merchant == "Priya Nair" and t.amount < 0 and _in(t, three) for t in T_
+                ),
+            ),
+        ],
+        [
+            T(
+                "How many Uber transactions in the last 3 months?",
+                lambda T_: sum(t.true_merchant == "Uber" and _in(t, three) for t in T_),
+            ),
+            T("what about Ola?", lambda T_: sum(t.true_merchant == "Ola" and _in(t, three) for t in T_)),
+        ],
+        [
+            T("How many credits did I receive?", lambda T_: sum(t.amount > 0 for t in T_)),
+            T("summarise our chat", lambda T_: "memory", kind="route"),
+        ],
+    ]
+
+
 _BOLD = re.compile(r"\*\*([^*]+)\*\*")
 _NUM = re.compile(r"-?(?:₹|rs\.?\s?)?\s?(\d[\d,]*(?:\.\d+)?)", re.IGNORECASE)
 
@@ -258,6 +315,37 @@ def run(end: dt.date) -> dict[str, Any]:
                     "tools": [t["tool"] for t in res["trace"]],
                 }
             )
+        # multi-turn conversations, each with its own history (the API's working memory)
+        turns: list[dict[str, Any]] = []
+        for convo in conversations(kit.today):
+            history: list[dict[str, Any]] = []
+            for case in convo:
+                res = agent.answer(kit, case["question"], history)
+                history += [
+                    {"role": "user", "content": case["question"]},
+                    {"role": "assistant", "content": res["answer"], "meta": {"context": res.get("context")}},
+                ]
+                if case["expect"] is None:
+                    continue
+                expected = case["expect"](truth)
+                if case["kind"] == "route":
+                    got = (res.get("pipeline") or [""])[0]
+                    ok = got == expected
+                else:
+                    nums = bold_numbers(res["answer"])
+                    got = nums[0] if nums else None
+                    ok = got is not None and abs(got - expected) <= 0.01
+                turns.append(
+                    {
+                        "question": case["question"],
+                        "turn": convo.index(case) + 1,
+                        "expected": expected,
+                        "got": got,
+                        "ok": bool(ok),
+                        "memory": (res.get("memory") or {}).get("kind"),
+                        "agents": res.get("pipeline") or [],
+                    }
+                )
     by_agent: dict[str, list[bool]] = {}
     for r in rows:
         key = (
@@ -274,6 +362,14 @@ def run(end: dt.date) -> dict[str, Any]:
         },
         "results": rows,
         "failures": [r for r in rows if not r["ok"]],
+        "conversations": {
+            "turns": len(turns),
+            "accuracy": round(sum(t["ok"] for t in turns) / len(turns), 4) if turns else None,
+            "follow_up_accuracy": round(
+                sum(t["ok"] for t in turns if t["turn"] > 1) / max(1, sum(t["turn"] > 1 for t in turns)), 4
+            ),
+            "results": turns,
+        },
         "mode": "deterministic chat (no LLM): guardrails → retriever → SQL analyst / finance tools",
         "truth": "expected answers computed from the generator's ground-truth categories, merchants and times",
     }

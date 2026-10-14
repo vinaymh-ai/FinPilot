@@ -16,6 +16,7 @@ import {
   Scale,
   Settings,
   Sparkles,
+  Tags,
   Sun,
   Target,
   Workflow,
@@ -34,6 +35,7 @@ const NAV = [
   { to: "/goals", label: "Goals", icon: Target },
   { to: "/insights", label: "Insights", icon: Sparkles },
   { to: "/transactions", label: "Transactions", icon: Receipt },
+  { to: "/categories", label: "Categories & rules", icon: Tags },
   { to: "/chat", label: "Ask FinPilot", icon: MessageCircle },
   { to: "/digests", label: "Digests", icon: Inbox },
   { to: "/agents", label: "Agents & Trail", icon: Workflow },
@@ -243,7 +245,7 @@ export default function Layout({ children }: { children: ReactNode }) {
             <span className="hidden sm:inline">Run agents</span>
           </Button>
         </header>
-        <main key={loc.pathname} className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-6 sm:px-6 lg:py-8">
+        <main key={loc.pathname.split("/")[1]} className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-6 sm:px-6 lg:py-8">
           {children}
         </main>
       </div>

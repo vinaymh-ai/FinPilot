@@ -53,6 +53,32 @@ MONTH_NAMES = {
 MONTH_ABBR = {k[:3]: v for k, v in MONTH_NAMES.items()} | {"sept": 9}
 WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
 LIST_LIMIT = 500
+# Everyday words narrower than the category they imply: "cab" is Uber/Ola, not fuel or metro.
+NARROW_WORDS = frozenset(
+    [
+        "CAB",
+        "CABS",
+        "TAXI",
+        "MEDICINE",
+        "MEDICINES",
+        "PHARMACY",
+        "PETROL",
+        "FUEL",
+        "GYM",
+        "MOVIE",
+        "MOVIES",
+        "FLIGHT",
+        "FLIGHTS",
+        "SALON",
+        "HAIRCUT",
+        "RECHARGE",
+        "RECHARGES",
+        "ELECTRICITY",
+        "INTERNET",
+        "BROADBAND",
+        "DOCTOR",
+    ]
+)
 TXN_NOUNS = r"\b(?:transactions?|payments?|purchases?|debits?|credits?|orders?|txns?|expenses?|spends?|charges|refunds?|bills?|transfers?)\b"
 
 # Questions owned by other specialists (advice, simulation, goals, forecast, subscriptions).
@@ -139,6 +165,9 @@ class QuerySpec:
     confidence: float = 0.0
     unexplained: list[str] = field(default_factory=list)
     transaction_ids: list[int] | None = None  # merchant filter resolved with the toolkit's payee matching
+    payee_source: str | None = None  # exact | fuzzy | variants | memory | phrase
+    inherited: list[str] = field(default_factory=list)  # aspects carried over from the conversation
+    implicit_measure: bool = False  # "groceries last month": a bare noun phrase, read as a total
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -149,6 +178,23 @@ class QuerySpec:
         ]
         d.pop("transaction_ids", None)
         return d
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> QuerySpec:
+        """Rebuild a spec stored in chat memory (dates come back as ISO strings)."""
+        known = set(cls.__dataclass_fields__)
+        data = {k: v for k, v in d.items() if k in known and v is not None or k in ("start", "end")}
+        for key in ("start", "end"):
+            if data.get(key):
+                data[key] = dt.date.fromisoformat(str(data[key]))
+        data["compare"] = [
+            (dt.date.fromisoformat(c["start"]), dt.date.fromisoformat(c["end"]), c["label"])
+            for c in d.get("compare") or []
+        ]
+        if data.get("hours"):
+            data["hours"] = tuple(data["hours"])
+        data.setdefault("measure", "list")
+        return cls(**data)
 
 
 def _amount(text: str) -> float | None:
@@ -317,8 +363,20 @@ def _rolling(n: int, unit: str, today: dt.date) -> tuple[dt.date, dt.date, str, 
     )
 
 
-def parse_question(question: str, kit: FinanceToolkit, retriever: LedgerRetriever) -> QuerySpec | None:
-    """Understand a data question deterministically, or return None when it is not one."""
+def parse_question(
+    question: str,
+    kit: FinanceToolkit,
+    retriever: LedgerRetriever,
+    *,
+    payees: list[str] | None = None,
+    base: QuerySpec | None = None,
+) -> QuerySpec | None:
+    """Understand a data question deterministically, or return None when it is not one.
+
+    `payees` are payees the conversation memory already resolved ("the same person"); `base` is
+    the previous question's spec for an elliptical follow-up ("and in August?"): every aspect the
+    new message does not mention is inherited from it.
+    """
     q = " ".join(question.lower().replace("’", "'").split())
     q = re.sub(r"[?!.]+$", "", q)
     if NOT_ANALYST.search(q):
@@ -381,8 +439,20 @@ def parse_question(question: str, kit: FinanceToolkit, retriever: LedgerRetrieve
             r"\b(spend|spent|spending|amount|total|how much|paid|received|income|expenses?|cost)\b|₹"
         )
         measure = "count" if re.search(TXN_NOUNS, q) and not re.search(money_words, q) else "sum"
+    inherited: list[str] = []
+    if measure is None and base is not None:
+        measure, limit = base.measure, base.limit
+        group_by = group_by or base.group_by
+        inherited.append("question")
     if measure is None and len(q.split()) <= 7 and re.search(TXN_NOUNS, q):
         measure = "list"  # "late night purchases", "upi payments last month"
+    provisional = False
+    if (
+        measure is None
+        and len(q.split()) <= 5
+        and not re.search(r"\b(why|should|can|could|will|would|if)\b", q)
+    ):
+        measure, provisional = "sum", True  # "medicines last month": a noun phrase asks for the total
     if measure == "avg" and group_by == "month":
         group_by = None  # "average monthly spend" is one number: the per-month average
     if measure is None:
@@ -397,14 +467,23 @@ def parse_question(question: str, kit: FinanceToolkit, retriever: LedgerRetrieve
         "EXPENSES", "SPENDS", "VISIT", "VISITS", "DID", "I",
     }  # fmt: skip
 
-    spec = QuerySpec(measure=measure, group_by=group_by, limit=limit, compare=compare)
+    spec = QuerySpec(measure=measure, group_by=group_by, limit=limit, compare=compare, inherited=inherited)
     if compare:
         explained |= {"VS", "VERSUS", "COMPARE", "COMPARED", "COMPARISON", "AGAINST", "AND", "WITH", "TO"}
         for _, _, lab in compare:
             explained |= set(normalize_text(lab).split())
     # ---- direction / scope -----------------------------------------------------------------------
+    both_directions = False
     if re.search(r"\b(income|salary|salaries|earned|earn|earnings|paycheck)\b", q):
         spec.income_only, spec.direction = True, "credit"
+    elif re.search(
+        r"\b(debits?|paid|sent|spent|money out|outflows?)\b.{0,30}\b(and|&|or|vs|versus)\b.{0,12}\b(credits?|received|"
+        r"money in|inflows?)\b|\b(credits?|received|money in|inflows?)\b.{0,30}\b(and|&|or|vs|versus)\b.{0,12}"
+        r"\b(debits?|paid|sent|spent|money out|outflows?)\b|\bin and out\b|\bboth (ways|directions)\b",
+        q,
+    ):
+        spec.direction, both_directions = None, True  # "debits and credits": both, reported separately
+        explained |= {"DEBIT", "DEBITS", "CREDIT", "CREDITS", "AND", "BOTH", "WAYS", "IN", "OUT"}
     elif re.search(
         r"\b(received|receive|credited|credits?|deposits?|money in|inflows?|refunds?|cashbacks?|got paid)\b",
         q,
@@ -419,9 +498,22 @@ def parse_question(question: str, kit: FinanceToolkit, retriever: LedgerRetrieve
         spec.direction = "debit"
     if re.search(r"\brefunds?\b|\bcashbacks?\b", q):
         spec.spending_only = True
-    if spec.measure in ("max", "min") and spec.direction is None and not group_by:
+    if spec.direction is None and base is not None and not both_directions:
+        spec.direction, spec.spending_only, spec.income_only = (
+            base.direction,
+            base.spending_only,
+            base.income_only,
+        )
+        if base.direction:
+            inherited.append("direction")
+    if spec.measure in ("max", "min") and spec.direction is None and not group_by and not both_directions:
         spec.direction = "debit" if not re.search(r"\btransactions?\b", q) else None
-    if group_by and spec.direction is None and spec.measure not in ("count", "frequency", "list"):
+    if (
+        group_by
+        and spec.direction is None
+        and not both_directions
+        and spec.measure not in ("count", "frequency", "list")
+    ):
         # "monthly breakdown", "top categories": amounts per group are spending unless stated otherwise
         spec.direction, spec.spending_only = "debit", True
 
@@ -429,6 +521,12 @@ def parse_question(question: str, kit: FinanceToolkit, retriever: LedgerRetrieve
     first = min((t.date for t in kit.txns), default=None)
     spec.start, spec.end, spec.period_label, consumed = parse_period(q, kit.today, first)
     explained |= set(consumed)
+    if base is not None and spec.start is None and spec.end is None and not compare:
+        spec.start, spec.end, spec.period_label = base.start, base.end, base.period_label
+        if base.compare and spec.measure == base.measure:
+            spec.compare = list(base.compare)
+        if base.start or base.end or base.compare:
+            inherited.append("period")
 
     # ---- channel / time / weekday / amount / flags ---------------------------------------------
     spec.channels = [channel for channel, rx in CHANNEL_WORDS.items() if re.search(rx, q)]
@@ -473,6 +571,16 @@ def parse_question(question: str, kit: FinanceToolkit, retriever: LedgerRetrieve
         spec.flags.append("impulse")
     if re.search(r"\b(uncategori[sz]ed|needs? review|need reviewing|unclear|unknown category)\b", q):
         spec.flags.append("needs_review")
+    if base is not None:
+        if not spec.channels and base.channels:
+            spec.channels = list(base.channels)
+            inherited.append("channel")
+        for attr in ("weekend", "weekday", "hours", "min_amount", "max_amount"):
+            if getattr(spec, attr) is None and getattr(base, attr) is not None:
+                setattr(spec, attr, getattr(base, attr))
+                inherited.append(attr)
+        if not spec.flags and base.flags:
+            spec.flags = list(base.flags)
 
     # ---- categories and merchants (value linking) ---------------------------------------------------
     cats = retriever.match_categories(q)
@@ -481,8 +589,15 @@ def parse_question(question: str, kit: FinanceToolkit, retriever: LedgerRetrieve
         strong = [c for c in strong if c["category"] == "income"] or [
             {"category": "income", "matched_by": "income"}
         ]
+    narrowed: list[str] = []
     for c in strong:
         if c["category"] == "transfers" and spec.measure != "list" and not re.search(r"\btransfers?\b", q):
+            continue
+        word = c["matched_by"].split("'")[1].upper() if c["matched_by"].startswith("word '") else ""
+        if word in NARROW_WORDS and not payees and (hits := retriever.described_by(word)):
+            # "cab rides" means Uber/Ola/Rapido, not every transport payment (fuel, metro, tolls)
+            narrowed += hits
+            explained |= set(word.split())
             continue
         spec.categories.append(c["category"])
         explained |= set(
@@ -491,7 +606,22 @@ def parse_question(question: str, kit: FinanceToolkit, retriever: LedgerRetrieve
     for c in strong:
         explained |= set(normalize_text(label(c["category"]).replace("&", " ")).split())
         explained |= set(normalize_text(c["category"].replace("_", " ")).split())
-    merchants = retriever.match_merchants(q, k=4, min_score=0.84)
+    if narrowed and not spec.categories:
+        spec.merchants, spec.payee_source = list(dict.fromkeys(narrowed)), "semantic"
+        merchants_needed = False
+    else:
+        merchants_needed = True
+    if payees:
+        spec.merchants, spec.payee_source = list(dict.fromkeys(payees)), "memory"
+        for name in spec.merchants:
+            name_words = set(normalize_text(name).split())
+            explained |= name_words
+            explained |= {w for w in words if any(_close(w, n) for n in name_words)}
+        merchants = []
+    elif not merchants_needed:
+        merchants = []
+    else:
+        merchants = retriever.match_merchants(q, k=6, min_score=0.84)
     cat_words = {w for c in strong for w in normalize_text(label(c["category"])).split()}
     for m in merchants:
         name_words = set(normalize_text(m["merchant"]).split())
@@ -499,10 +629,41 @@ def parse_question(question: str, kit: FinanceToolkit, retriever: LedgerRetrieve
             continue  # "Rent" the merchant label is the rent category, not a payee filter
         spec.merchants.append(m["merchant"])
         explained |= name_words
-        if m["matched_by"].startswith("spelling"):
+        why = m["matched_by"]
+        if why.startswith("memory"):
+            spec.payee_source = "memory"
+            # the remembered word ("landlord") names this payee, not a category
+            mem_words = {w for t, _, _ in retriever.memory_matches(q) for w in t.split()}
+            explained |= mem_words
+            spec.categories = [
+                c
+                for c in spec.categories
+                if not any(w in mem_words for w in normalize_text(c.replace("_", " ")).split())
+                and not (c == "rent" and "LANDLORD" in mem_words)
+            ]
+        if why.startswith(("spelling", "name word")) or why.startswith("spelling variant"):
             explained |= {w for w in words if any(_close(w, n) for n in name_words)}
-    if spec.merchants and len(spec.merchants) > 1 and merchants[0]["match_score"] >= 0.95:
-        spec.merchants = spec.merchants[:1]
+            from finpilot.services.semantic import word_variant
+
+            explained |= {w for w in words if any(word_variant(w, n) for n in name_words)}
+    if spec.merchants and merchants:
+        top = merchants[0]
+        keep = (
+            retriever.variants(top["merchant"])
+            if top["match_score"] >= 0.95 or len(spec.merchants) > 1
+            else []
+        )
+        if top["match_score"] >= 0.95:
+            spec.merchants = [m for m in spec.merchants if m in keep] or spec.merchants[:1]
+        cluster = set(retriever.variants(spec.merchants[0]))
+        if spec.payee_source is None:
+            spec.payee_source = (
+                "variants"
+                if len(spec.merchants) > 1 and set(spec.merchants) <= cluster
+                else "exact"
+                if top["match_score"] >= 0.95
+                else "fuzzy"
+            )
 
     # ---- leftovers ---------------------------------------------------------------------------------
     leftovers = [
@@ -527,19 +688,57 @@ def parse_question(question: str, kit: FinanceToolkit, retriever: LedgerRetrieve
         if found:
             phrase = " ".join(found)
             if any(merchant_matches(phrase, t.merchant, t.description) for t in kit.txns):
-                spec.merchants = [phrase.title()]
+                spec.merchants, spec.payee_source = [phrase.title()], "phrase"
             else:
                 spec.text_terms = found[:3]
             spec.confidence -= 0.15
         spec.missing_terms = [w for w in leftovers if w not in found and w in slots and len(w) >= 3]
         leftovers = [w for w in leftovers if w not in found and w not in spec.missing_terms]
+        # Meaning, not just spelling: "pizza" → Domino's, "coffee" → Starbucks (merchant enrichment).
+        semantic = [m for w in [*found, *spec.missing_terms] for m in retriever.described_by(w)]
+        if semantic:
+            by_name = [
+                t.merchant
+                for name in spec.merchants
+                for t in kit.txns
+                if merchant_matches(name, t.merchant, t.description)
+            ]
+            spec.merchants = list(dict.fromkeys([*by_name, *semantic]))
+            spec.payee_source = "semantic"
+            spec.text_terms = [w for w in spec.text_terms if not retriever.described_by(w)]
+            spec.missing_terms = [w for w in spec.missing_terms if not retriever.described_by(w)]
+    if (
+        base is not None
+        and not spec.merchants
+        and not spec.categories
+        and not spec.text_terms
+        and not spec.missing_terms
+    ):
+        spec.merchants, spec.categories = list(base.merchants), list(base.categories)
+        spec.text_terms, spec.payee_source = list(base.text_terms), base.payee_source
+        if base.merchants or base.categories or base.text_terms:
+            inherited.append("subject")
     if spec.merchants:
         ids: set[int] = set()
         for name in spec.merchants:
-            ids |= {t.id for t in kit.txns if merchant_matches(name, t.merchant, t.description)}
+            if (
+                spec.payee_source in ("memory", "variants", "exact", "fuzzy", "semantic")
+                and name in retriever.merchants
+            ):
+                ids |= {t.id for t in kit.txns if t.merchant == name}
+            else:
+                ids |= {t.id for t in kit.txns if merchant_matches(name, t.merchant, t.description)}
         spec.transaction_ids = sorted(ids)
     spec.unexplained = leftovers
     spec.confidence += 0.95 if not leftovers else max(0.3, 0.8 - 0.15 * len(leftovers))
+    if provisional:
+        if not (spec.categories or spec.merchants or spec.text_terms) or leftovers:
+            return None
+        spec.implicit_measure = True
+        if not spec.categories and spec.payee_source != "semantic" and spec.start is None:
+            spec.measure = "list"  # a bare payee name ("Rahul?") asks for their transactions
+        elif spec.direction is None:
+            spec.direction, spec.spending_only = "debit", True
     return spec
 
 
@@ -1056,7 +1255,7 @@ def render(
         )
     if (spec.merchants or spec.text_terms) and not single and s.get("merchant_names"):
         names = sorted(set(str(s["merchant_names"]).split(",")))
-        lines.append(f"_Matched payees: {', '.join(names[:8])}{' …' if len(names) > 8 else ''}._")
+        lines.append(payee_note(spec, names))
     return "\n\n".join(lines), artifacts
 
 
@@ -1333,6 +1532,19 @@ class SQLAnalystAgent(BaseAgent):
                 },
             }
         return None
+
+
+def payee_note(spec: QuerySpec, names: list[str]) -> str:
+    """Say which payees the answer covers — never silently merge different people."""
+    shown = ", ".join(names[:8]) + (" …" if len(names) > 8 else "")
+    if len(names) > 1 and spec.payee_source == "variants":
+        return f"_Includes {len(names)} spellings of the same payee: {shown}. Name one spelling to narrow it down._"
+    if spec.payee_source == "semantic":
+        return f"_Matched by name or meaning: {shown}._"
+    if len(names) > 1 and spec.payee_source == "phrase":
+        term = " ".join(spec.merchants)
+        return f"_“{term}” matches {len(names)} different payees: {shown}. Ask about one by full name to narrow it down._"
+    return f"_Matched payees: {shown}._"
 
 
 def _trace_result(res: QueryResult, preview: int = 60) -> dict[str, Any]:

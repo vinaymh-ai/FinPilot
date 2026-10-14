@@ -1,4 +1,4 @@
-# FinPilot self-evaluation (2026-10-14 10:16)
+# FinPilot self-evaluation (2026-10-14 13:29)
 
 Mode: **deterministic (no LLM)** · Test data: 5,631 synthetic transactions (9 statements, 3 personas × 3 seeds, 21.8% from long-tail merchants absent from our lexicon).
 
@@ -22,16 +22,27 @@ Payment channel accuracy 99.8% · debit/credit direction 100.0% · hold-out inte
 | fallback | 239 | 19.7% |
 | p2p | 212 | 100.0% |
 
-### Real-world narration benchmark
+### Real-world narration benchmark — merchants
 
 100 hand-labelled narrations in HDFC, ICICI, SBI, Axis, Kotak statement formats (`evaluation/narration_cases.py`), independent of the synthetic generator.
 
 | Measurement | Category accuracy | Channel accuracy | Confident share | Precision when confident |
 |---|---|---|---|---|
 | First run, 2026-10-14 (held-out) | 91.0% | 97.0% | 84% | 98.8% |
-| Current (after fixing the generic bugs it exposed) | 98.0% | 99.0% | 87% | 100.0% |
+| Current (after fixing the generic bugs it exposed) | 98.0% | 99.0% | 88% | 100.0% |
 
 Remaining misses: `FT - DR - 50100123456789 - VIKRAM SINGH - TRANSFER` → other (expected transfers); `DEBIT-ATMCard AMC 412345*1234` → other (expected fees).
+
+### Real-world narration benchmark — every kind of bank transaction
+
+120 hand-labelled narrations in SBI, HDFC, ICICI, Axis, Kotak, PNB, BoB, Canara, Union, IDFC First, Yes statement formats (`evaluation/narration_cases_2.py`), independent of the synthetic generator.
+
+| Measurement | Category accuracy | Channel accuracy | Confident share | Precision when confident |
+|---|---|---|---|---|
+| First run, 2026-10-14 (held-out) | 85.0% | 96.5% | 81% | 96.9% |
+| Current (after fixing the generic bugs it exposed) | 100.0% | 100.0% | 96% | 100.0% |
+
+Remaining misses: none.
 
 ## 2. Pattern & anomaly detection
 
@@ -107,6 +118,23 @@ Tool routing: 20 labelled questions → correct tool sequence in **100%** (deter
 
 Misses come from categorisation, not the chat: e.g. long-tail shops (Chumbak, Fabindia) stay uncategorised without the LLM stage, so a 'shopping' list is short by those rows.
 
+### Conversation memory (multi-turn)
+
+**100%** of 10 turns correct; follow-up turns (which only make sense with memory — “and in August?”, “how many times did I pay her?”, “what about Ola?”) **100%**. First run of this set, before fixing what it exposed: 80% overall, 67% on follow-ups (ellipsis after a spending-tool answer had no structured focus to inherit).
+
+| Turn | Question | Memory | Expected | Answer | ✓ |
+|---|---|---|---|---|---|
+| 1 | How much did I spend on food delivery last month? | new | 9931.85 | 9931.85 | ✅ |
+| 2 | and in August? | ellipsis | 8392.3 | 8392.3 | ✅ |
+| 3 | what about dining? | ellipsis | 4767.0 | 4767.0 | ✅ |
+| 1 | How much did I pay Priya Nair in total? | new | 14400 | 14400.0 | ✅ |
+| 2 | how many times did I pay her? | follow_up | 8 | 8.0 | ✅ |
+| 3 | and in the last 3 months? | ellipsis | 3 | 3.0 | ✅ |
+| 1 | How many Uber transactions in the last 3 months? | new | 16 | 16.0 | ✅ |
+| 2 | what about Ola? | ellipsis | 8 | 8.0 | ✅ |
+| 1 | How many credits did I receive? | new | 19 | 19.0 | ✅ |
+| 2 | summarise our chat | handled | memory | memory | ✅ |
+
 ## 6. System One decisions (Jev)
 
 Model `typesafe/jev-1.13` via Mesh `POST /v1/evaluate`. Status: **pending — no Jev measurements in this run**.
@@ -115,7 +143,7 @@ Model `typesafe/jev-1.13` via Mesh `POST /v1/evaluate`. Status: **pending — no
 
 | Decision | Deterministic path | Result |
 |---|---|---|
-| Merchant category (142 hand-labelled merchants) | lexicon + keywords | 78.9% overall; **30.8%** on the 39 it is unsure about (these go to Jev) |
+| Merchant category (142 hand-labelled merchants) | lexicon + keywords | 79.6% overall; **23.5%** on the 34 it is unsure about (these go to Jev) |
 | Chat routing (62 messages) | regex intent router | 50.0% intent accuracy; cannot refuse the 12 unsafe/off-topic messages or spot the 6 that need reasoning |
 | Faithfulness (24 drafts, 18 unfaithful) | numeric grounding check | catches **22%** of unfaithful drafts — 14 contain no wrong number at all |
 | Goal type (24 goal names) | keyword table | type 75%, spend-vs-keep 92% |
@@ -125,8 +153,8 @@ Model `typesafe/jev-1.13` via Mesh `POST /v1/evaluate`. Status: **pending — no
 
 | Decision | Input tokens / request | Jev $ / 1k | LLM it replaces, $ / 1k (est.) |
 |---|---|---|---|
-| merchant_category | ~1105 | $0.0464 | $0.0411 |
-| chat_route | ~1220 | $0.0513 | $0.8529 |
+| merchant_category | ~1149 | $0.0483 | $0.0416 |
+| chat_route | ~1245 | $0.0523 | $0.8892 |
 | faithfulness | ~237 | $0.0100 | — (new check) |
 | goal_type | ~340 | $0.0143 | — (new check) |
 | csv_column | ~219 | $0.0092 | — (new check) |

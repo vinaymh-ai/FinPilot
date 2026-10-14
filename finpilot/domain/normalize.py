@@ -178,7 +178,8 @@ def is_card_repayment(description: str) -> bool:
         re.search(
             r"\b(?:CREDIT\s*CARD|CC|CARD)\s*(?:BILL|PAYMENT|REPAYMENT|SETTLEMENT)\b|"
             r"\b(?:ICICI|HDFC|SBI|AXIS|KOTAK)(?:\s+BANK)?\s+CRED(?:IT\s*CARD)?\b|"
-            r"\bAUTO\s*DEBIT\s+CC\w*",
+            r"\bAUTO\s*DEBIT\s+CC\w*|"
+            r"\bBILL\s?PAY\w*\b.*\b\d{4,6}X{4,}\d{3,4}\b",
             normalize_text(description),
         )
     )
@@ -297,17 +298,21 @@ CHANNELS = {
 # Order matters: a specific rail ("MMT/IMPS", "NACH") wins over a generic word elsewhere in the
 # narration, and UPI narrations often contain bank codes that look like other rails.
 _CHANNEL_RULES: list[tuple[str, re.Pattern[str]]] = [
-    ("atm", re.compile(r"\b(?:ATM|NWD|ATW|CASH ?WDL|CASH ?WITHDRAWAL|CWDR)\b")),
+    ("atm", re.compile(r"\b(?:ATM|NWD|ATW|EAW|CASH ?WDL|CASH ?WITHDRAWAL|CWDR)\b")),
     ("cash_deposit", re.compile(r"\b(?:CASH ?DEP(?:OSIT)?|BY ?CASH|CDM)\b")),
     ("upi", re.compile(r"\bUPI\b|@[A-Z]{2,}")),
-    ("auto_debit", re.compile(r"\b(?:NACH|ECS|ACH|SI|AUTOPAY|MANDATE|AUTO ?DEBIT|STANDING ?INSTRUCTION)\b")),
+    (
+        "auto_debit",
+        re.compile(r"\b(?:NACH|ECS|ACH|ACHDR|ACHCR|SI|AUTOPAY|MANDATE|AUTO ?DEBIT|STANDING ?INSTRUCTION)\b"),
+    ),
     ("imps", re.compile(r"\b(?:IMPS|MMT)\b")),
     ("neft", re.compile(r"\bNEFT\b")),
     ("rtgs", re.compile(r"\bRTGS\b")),
     (
         "card",
         re.compile(
-            r"\b(?:POS|ECOM|VISA|MASTERCARD|RUPAY|DEBIT ?CARD|CREDIT ?CARD ?PUR|PUR|VPS|IPS|PCD|DC ?\d{4})\b"
+            r"\b(?:POS|ECOM|VISA|MASTERCARD|RUPAY|DEBIT ?CARD|CREDIT ?CARD ?PUR|PUR|VPS|IPS|PCD|DC ?\d{4}|CARD ?TXN|"
+            r"CARD ?TRANSACTION)\b"
         ),
     ),
     ("cheque", re.compile(r"\b(?:CHQ|CHEQUE|CLG|CLEARING|INWARD ?CLG)\b")),

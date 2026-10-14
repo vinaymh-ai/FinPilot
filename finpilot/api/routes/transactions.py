@@ -14,7 +14,7 @@ from starlette.concurrency import run_in_threadpool
 from finpilot.agents.coordinator import Coordinator
 from finpilot.api import serializers as ser
 from finpilot.api.deps import current_user_id, get_db
-from finpilot.domain.taxonomy import CATEGORY_IDS
+from finpilot.domain import taxonomy
 from finpilot.models import RecurringSeries, Transaction
 from finpilot.schemas import RecurringUpdate, TransactionCreate, TransactionUpdate
 from finpilot.services import repository as repo
@@ -110,7 +110,8 @@ def create_transaction(
     uid: int = Depends(current_user_id),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    if body.category and body.category not in CATEGORY_IDS:
+    repo.custom_categories(db, uid)
+    if body.category and not taxonomy.valid_for(body.category, uid):
         raise HTTPException(422, f"unknown category {body.category}")
     user = repo.get_or_create_user(db, uid)
     row = ParsedRow(
@@ -134,13 +135,18 @@ def update_transaction(
         raise HTTPException(404, "transaction not found")
     updated = 1
     if body.category is not None:
-        if body.category not in CATEGORY_IDS:
+        repo.custom_categories(db, uid)
+        if not taxonomy.valid_for(body.category, uid):
             raise HTTPException(422, f"unknown category {body.category}")
         if body.apply_to_merchant:
-            updated = repo.remember_correction(db, uid, t.merchant, body.category)
+            try:
+                updated = repo.remember_correction(db, uid, t.merchant, body.category)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
         else:
-            t.category, t.category_source, t.category_confidence = body.category, "user", 1.0
-            t.category_reason = "Corrected by you"
+            repo.set_category(
+                db, t, body.category, source="user", confidence=1.0, reason="Corrected by you", actor="user"
+            )
     if body.notes is not None:
         t.notes = body.notes
     db.commit()

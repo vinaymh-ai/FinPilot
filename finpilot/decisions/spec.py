@@ -87,6 +87,10 @@ CATEGORY_GUIDE: dict[str, dict[str, Any]] = {
         "not_for": "credit-card repayment; a name or payment app alone does not prove a transfer",
     },
     "cash": {"what": "ATM cash withdrawals"},
+    "taxes": {
+        "what": "Income/advance/self-assessment tax, GST, property and professional tax, traffic challans",
+        "not_for": "tax refunds (income) and GST charged by a bank on its fees (fees)",
+    },
     "fees": {"what": "Bank charges, late fees, penalties, card annual fees"},
     "gifts_donations": {"what": "Gifts, charity, temple or NGO donations"},
     "other": {"what": "Genuinely unclear from the text — choose this rather than guessing"},

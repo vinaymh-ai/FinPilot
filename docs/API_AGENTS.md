@@ -9,7 +9,8 @@ by default and is not called by the default agents; its optional code and histor
   The plan step records *why* each step runs, the transactions needing review and the model each agent
   uses. Missing balance provenance no longer skips advice. Critical failures stop dependent work. Changed
   transaction, balance or goal inputs invalidate stale results. Steps record model calls and decisions.
-- **Categorizer:** memory → curated lexicon (family rules keep the matched brand, e.g. "Third Wave Coffee",
+- **Categorizer:** the user's own rules (debit/credit, amount and channel filters; terms matched as words, never
+  as user regex) → memory → curated lexicon (family rules keep the matched brand, e.g. "Third Wave Coffee",
   not "Café") → keyword *phrases* (a matched phrase hides the words inside it: "MILK PARLOUR" is a dairy) →
   person-to-person detection (needs a common Indian name or a phone-number VPA; bank "P2A" markers count) →
   **one LLM decision per uncertain merchant + direction** (79 groups instead of ~600 narrations on the demo)
@@ -18,6 +19,11 @@ by default and is not called by the default agents; its optional code and histor
   model never erases specific evidence; a curated rule yields only to a confident model. P2P payments are
   `transfers` with review-level confidence because the purpose is unknown. Manual/import labels and user
   memory stay authoritative. Every transaction also records **direction** and **payment channel**.
+  Custom categories (each behaving like a built-in parent) and the user's own corrections are in the model's
+  prompt as taxonomy and few-shot conventions. Bank and government movements are named explicitly: taxes
+  (new category) and tax refunds, bank charges and GST on charges, self-transfers, wallet loads, FD/RD sweeps,
+  NPS and digital gold. Every category change — categorizer run, rule, manual edit, bulk review, chat
+  confirmation — is written to `category_events` with before/after, source, confidence and reason.
 - **Analyzer:** Exact aggregates establish trends (with the merchants driving each spike), month-to-date pace
   against the same days of last month, anomalies, debt obligations, bank cash flow and the review queue.
   Its prompt writes 3-4 ordered observations, copying figures exactly. Bank history alone cannot prove a
@@ -37,8 +43,15 @@ by default and is not called by the default agents; its optional code and histor
   needs at least two reasoning steps and a finite impact, and every figure in the title/message must be
   grounded in its evidence. The verdict is appended to the reasoning; failures are marked ungrounded. It also
   reports categorization health (share of outflows needing review).
+- **Memory:** runs first in chat. Working memory per conversation (stored with each answer: the structured
+  focus — payees, categories, period, the analyst's query spec — and any open question) resolves references
+  ("the same person"), ellipsis ("and in August?" re-asks the previous spec with one aspect changed), replies
+  to clarifications ("both", "the first one") and recaps. Long-term memory per user keeps explicit statements
+  (aliases, relationships, preferences, notes), never text that trips the injection guard; relationships can
+  turn into a confirmed recategorisation ("Hanumanthaiah is my landlord" → "yes" → rent).
 - **Chat team:** guardrails (actions, injection, off-topic) → retriever (value linking to the user's merchants
-  and categories, BM25 over insights/recommendations/goals) → SQL Analyst for data questions (deterministic
+  and categories by spelling, name variants, meaning and memory — hybrid sparse vectors with optional dense
+  embeddings fused by RRF — plus BM25 over insights/recommendations/goals) → SQL Analyst for data questions (deterministic
   parser when every word is explained, otherwise LLM text-to-SQL over a sandboxed per-user SQLite view with
   schema, date anchors and retrieved values, repaired from database errors) or the planner for finance tools
   → composer + verifier. Answers carry exact table/chart artifacts. "Biggest expense" means an individual

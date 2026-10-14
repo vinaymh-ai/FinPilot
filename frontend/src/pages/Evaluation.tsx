@@ -7,13 +7,13 @@ import { titleCase } from "../lib/format";
 
 const pctv = (x: number | null | undefined, d = 0) => (x == null ? "–" : `${(x * 100).toFixed(d)}%`);
 
-function NarrationSection({ n }: { n: any }) {
+function NarrationSection({ n, title = "Real-world narration benchmark", file = "evaluation/narration_cases.py" }: { n: any; title?: string; file?: string }) {
   const fr = n.first_run;
   return (
     <Card>
       <CardHeader
-        title="Real-world narration benchmark"
-        subtitle={<>{n.cases} hand-labelled narrations in {n.banks.join(", ")} formats · <code>evaluation/narration_cases.py</code></>}
+        title={title}
+        subtitle={<>{n.cases} hand-labelled narrations in {n.banks.join(", ")} formats · <code>{file}</code></>}
         icon={<Landmark className="size-4" />}
       />
       <div className="overflow-x-auto p-5 pt-3">
@@ -75,7 +75,7 @@ function ChatQASection({ qa }: { qa: any }) {
           </Badge>
         ))}
       </div>
-      <div className="max-h-[420px] overflow-auto p-5 pt-3">
+      <div className="max-h-[560px] overflow-auto p-5 pt-3">
         <table className="w-full text-[12.5px]">
           <thead className="sticky top-0 bg-surface text-left text-muted">
             <tr>
@@ -99,6 +99,34 @@ function ChatQASection({ qa }: { qa: any }) {
           </tbody>
         </table>
         <p className="mt-2 text-[12px] text-muted">{qa.mode}. {qa.truth}.</p>
+        {qa.conversations && (
+          <div className="mt-4">
+            <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[13px] font-medium">
+              Conversation memory — multi-turn
+              <Badge tone={qa.conversations.accuracy === 1 ? "green" : "amber"}>
+                {qa.conversations.turns} turns · {pctv(qa.conversations.accuracy)}
+              </Badge>
+              <Badge tone="violet">follow-ups {pctv(qa.conversations.follow_up_accuracy)}</Badge>
+            </div>
+            <table className="w-full text-[12.5px]">
+              <tbody>
+                {qa.conversations.results.map((r: any, i: number) => (
+                  <tr key={i} className="border-t border-line">
+                    <td className="w-8 py-1.5 text-muted">#{r.turn}</td>
+                    <td className="py-1.5 pr-3">
+                      {r.question} {r.memory && r.memory !== "new" && <Badge tone="violet">{r.memory}</Badge>}
+                    </td>
+                    <td className="num text-right">{String(r.expected)}</td>
+                    <td className="num text-right">{String(r.got ?? "–")}</td>
+                    <td className="w-8 text-center">
+                      {r.ok ? <CheckCircle2 className="inline size-4 text-emerald-500" /> : <XCircle className="inline size-4 text-red-500" />}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </Card>
   );
@@ -246,7 +274,9 @@ export default function Evaluation() {
             <Stat
               label="Real bank narrations"
               value={pctv(data.narrations.category_accuracy, 1)}
-              hint={`first held-out run ${pctv(data.narrations.first_run.category_accuracy, 1)} · ${data.narrations.cases} cases`}
+              hint={`first held-out run ${pctv(data.narrations.first_run.category_accuracy, 1)} · ${data.narrations.cases} cases${
+                data.narrations_2 ? ` · all transaction types ${pctv(data.narrations_2.category_accuracy, 1)} (first run ${pctv(data.narrations_2.first_run.category_accuracy, 1)})` : ""
+              }`}
               icon={<Landmark className="size-4" />}
             />
           )}
@@ -269,7 +299,10 @@ export default function Evaluation() {
       {(data.chat_qa || data.narrations) && (
         <div className="grid gap-6 xl:grid-cols-2">
           {data.chat_qa && <ChatQASection qa={data.chat_qa} />}
-          {data.narrations && <NarrationSection n={data.narrations} />}
+          {data.narrations && <NarrationSection n={data.narrations} title="Narration benchmark — merchants" />}
+          {data.narrations_2 && (
+            <NarrationSection n={data.narrations_2} title="Narration benchmark — every kind of bank transaction" file="evaluation/narration_cases_2.py" />
+          )}
         </div>
       )}
 
