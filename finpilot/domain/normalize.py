@@ -177,7 +177,8 @@ def is_card_repayment(description: str) -> bool:
     return bool(
         re.search(
             r"\b(?:CREDIT\s*CARD|CC|CARD)\s*(?:BILL|PAYMENT|REPAYMENT|SETTLEMENT)\b|"
-            r"\b(?:ICICI|HDFC|SBI|AXIS|KOTAK)\s+CRED(?:IT\s*CARD)?\b",
+            r"\b(?:ICICI|HDFC|SBI|AXIS|KOTAK)(?:\s+BANK)?\s+CRED(?:IT\s*CARD)?\b|"
+            r"\bAUTO\s*DEBIT\s+CC\w*",
             normalize_text(description),
         )
     )
@@ -208,19 +209,31 @@ def merchant_matches(query: str, merchant: str, description: str) -> bool:
     )
 
 
+_NOTE_NOISE = re.compile(
+    r"^(?:BY|TO) TRANSFER$|^PAYMENT (?:FROM|FR|TO)\b|^PAID VIA$|^SENT USING\b|^REV$|^P2A$|^P2P$|"
+    r"\bBANK\b|^STATE BANK|^(?:HDFC|ICICI|AXIS|KOTAK|SBI|YES|IDFC|INDUSIND|FEDERAL|CANARA|PNB|BOB)$"
+)
+
+
 def _upi_payee(description: str) -> tuple[str | None, str | None]:
-    """Return (payee_name, vpa_handle) for UPI-style descriptions."""
+    """Return (payee_name, vpa_handle) for UPI-style (and IMPS person-to-account) narrations.
+
+    Banks print the payee *before* the VPA ("UPI/DR/ref/NAME/BANK/name@vpa/note"); whatever
+    follows the VPA is the payer's bank and note. ICICI's "UPI/ref/note/vpa/bank" has no payee
+    name at all, so the VPA handle identifies the payee there.
+    """
     up = description.upper()
-    if "UPI" not in up and "@" not in up:
+    if "UPI" not in up and "@" not in up and not re.search(r"\bP2A\b", up):
         return None, None
     parts = [p.strip() for p in re.split(r"[/\-|]", description) if p.strip()]
-    vpa = next((p for p in parts if "@" in p), None)
+    vpa_index = next((i for i, p in enumerate(parts) if "@" in p), None)
+    vpa = parts[vpa_index] if vpa_index is not None else None
     handle = vpa.split("@")[0].upper() if vpa else None
-    for p in parts:
-        u = p.upper().strip()
+    for p in parts if vpa_index is None else parts[:vpa_index]:
+        u = re.sub(r"\s+", " ", p.upper().strip())
         if u in _UPI_NOISE or "@" in u or re.fullmatch(r"[\dX*]+", u) or _IFSC.fullmatch(u):
             continue
-        if len(u) <= 2 or u in _BANK_CODES:
+        if len(u) <= 2 or u in _BANK_CODES or _NOTE_NOISE.search(u):
             continue
         return u, handle
     return None, handle
@@ -300,12 +313,16 @@ _CHANNEL_RULES: list[tuple[str, re.Pattern[str]]] = [
     ("cheque", re.compile(r"\b(?:CHQ|CHEQUE|CLG|CLEARING|INWARD ?CLG)\b")),
     (
         "netbanking",
-        re.compile(r"\b(?:INB|NETBANKING|NET ?BANKING|BIL|BILLPAY|BILL ?PAY|BPAY|IB|TPT|ONLINE ?TRANSFER)\b"),
+        re.compile(
+            r"\b(?:INB|INF|INFT|NETBANKING|NET ?BANKING|BIL|BILLPAY|BILL ?PAY|BPAY|IB|TPT|ONLINE ?TRANSFER)\b"
+        ),
     ),
     ("wallet", re.compile(r"\b(?:WALLET|PAYTM ?WALLET|AMAZON ?PAY ?BALANCE)\b")),
     (
         "bank",
-        re.compile(r"\b(?:INT(?:EREST)? ?(?:PD|PAID|CR|CREDIT)|SB ?INT|CHARGES|CHGS|GST|TDS|MIN ?BAL)\b"),
+        re.compile(
+            r"\b(?:INT(?:EREST)? ?(?:PD|PAID|CR|CREDIT)|CREDIT ?INTEREST|SB ?INT|CHARGES|CHGS|GST|TDS|MIN ?BAL)\b"
+        ),
     ),
 ]
 

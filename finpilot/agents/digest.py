@@ -6,6 +6,7 @@ import html
 from typing import Any
 
 from finpilot.agents.base import BaseAgent
+from finpilot.domain.money import format_money
 from finpilot.llm.grounding import check_grounding
 
 SYSTEM_PROMPT = """You are the Digest agent of FinPilot. Write the opening of a short weekly money email to ONE user.
@@ -19,8 +20,7 @@ Respond with JSON only: {{"intro": "...", "subject": "..."}}"""
 
 
 def _money(x: float, currency: str) -> str:
-    sym = {"INR": "₹", "USD": "$", "EUR": "€", "GBP": "£"}.get(currency, "")
-    return f"{'-' if x < 0 else ''}{sym}{abs(x):,.0f}"
+    return format_money(x, currency, 0)
 
 
 class DigestAgent(BaseAgent):

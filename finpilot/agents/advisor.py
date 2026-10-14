@@ -23,6 +23,7 @@ from typing import Any
 
 from finpilot.agents.analyzer import AnalysisReport, Finding
 from finpilot.agents.base import BaseAgent
+from finpilot.domain.money import format_money
 from finpilot.domain.taxonomy import DISCRETIONARY, label
 from finpilot.llm.grounding import check_grounding
 
@@ -31,9 +32,7 @@ SUPPRESS_DAYS = 30
 
 
 def money(amount: float, currency: str = "INR") -> str:
-    sym = {"INR": "₹", "USD": "$", "EUR": "€", "GBP": "£"}.get(currency, "")
-    digits = 2 if round(abs(amount), 2) != round(abs(amount)) else 0
-    return f"{'-' if amount < 0 else ''}{sym}{abs(amount):,.{digits}f}"
+    return format_money(amount, currency)
 
 
 @dataclass

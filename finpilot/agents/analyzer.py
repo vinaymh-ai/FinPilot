@@ -21,6 +21,7 @@ from typing import Any
 import numpy as np
 
 from finpilot.agents.base import BaseAgent
+from finpilot.domain.money import format_money
 from finpilot.domain.recurring import RecurringCandidate, TxnLite, monthly_equivalent
 from finpilot.domain.stats import add_months, month_key, pct_change, robust_z
 from finpilot.domain.taxonomy import DISCRETIONARY, NON_SPEND, is_spending_flow, label
@@ -116,9 +117,7 @@ Respond with JSON only: {{"profile": ["...", "..."]}}"""
 
 
 def _fmt(amount: float, currency: str) -> str:
-    sym = {"INR": "₹", "USD": "$", "EUR": "€", "GBP": "£"}.get(currency, "")
-    digits = 2 if round(abs(amount), 2) != round(abs(amount)) else 0
-    return f"{'-' if amount < 0 else ''}{sym}{abs(amount):,.{digits}f}"
+    return format_money(amount, currency)
 
 
 class AnalyzerAgent(BaseAgent):

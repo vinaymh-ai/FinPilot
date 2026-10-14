@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from finpilot.agents.forecaster import Adjustment, ForecastEngine, ForecasterAgent
 from finpilot.config import get_settings
+from finpilot.domain.money import format_money
 from finpilot.domain.normalize import merchant_matches, normalize_text
 from finpilot.domain.recurring import monthly_equivalent
 from finpilot.domain.stats import add_months, month_key
@@ -142,9 +143,7 @@ class FinanceToolkit:
         )
 
     def money(self, x: float) -> str:
-        sym = {"INR": "₹", "USD": "$", "EUR": "€", "GBP": "£"}.get(self.currency, "")
-        digits = 2 if round(abs(x), 2) != round(abs(x)) else 0
-        return f"{'-' if x < 0 else ''}{sym}{abs(x):,.{digits}f}"
+        return format_money(x, self.currency)
 
     def data_quality(self) -> dict[str, Any]:
         dates = [t.date for t in self.rows]

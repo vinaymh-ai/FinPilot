@@ -348,7 +348,8 @@ MERCHANT_RULES: list[MerchantRule] = [
         "investments",
     ),
     # ---- Cash ---------------------------------------------------------------------------------
-    R(r"ATM ?(WDL|WITHDRAWAL|CASH)?|CASH ?(WDL|WITHDRAWAL)|NWD", "ATM withdrawal", "cash"),
+    R(r"ATM ?(WDL|WITHDRAWAL|CASH)?|CASH ?(WDL|WITHDRAWAL)|NWD|ATW", "ATM withdrawal", "cash"),
+    R(r"CASH ?DEP(OSIT)?|BY ?CASH ?DEPOSIT|CDM ?DEPOSIT", "Cash deposit", "transfers"),
     # ---- Fees ---------------------------------------------------------------------------------
     R(
         r"LATE ?(PAYMENT ?)?FEE|LATE ?PAYMENT ?CHARGE|PENALTY|MIN ?BAL(ANCE)? ?CHARGE|NON ?MAINT(ENANCE)? ?CHARGE|"

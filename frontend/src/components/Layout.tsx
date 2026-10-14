@@ -128,7 +128,7 @@ export default function Layout({ children }: { children: ReactNode }) {
   const { dark, toggle } = useTheme();
   const [open, setOpen] = useState(false);
   const loc = useLocation();
-  const llmAgents = meta?.agents.filter((a) => a.model !== "rules" && a.model !== "langgraph") ?? [];
+  const llmAgents = (meta?.agents ?? []).filter((a) => a.model !== "rules" && a.model !== "langgraph" && a.model.includes(":"));
 
   const nav = (
     <nav className="flex flex-col gap-0.5">

@@ -36,6 +36,7 @@ from finpilot.decisions.policy import log_decisions, order_debias, record, top_p
 from finpilot.decisions.spec import chat_questions, chat_state
 from finpilot.domain.normalize import normalize_text
 from finpilot.domain.stats import add_months
+from finpilot.domain.taxonomy import DISCRETIONARY
 from finpilot.llm.client import LLMError
 from finpilot.llm.grounding import check_grounding
 from finpilot.observability.tracing import traceable
@@ -419,7 +420,7 @@ class ChatAgent(BaseAgent):
         merchants: dict[str, int] = {}
         categories: dict[str, float] = {}
         for t in kit.txns:
-            if t.amount < 0 and t.category not in ("transfers", "investments", "income", "other"):
+            if t.amount < 0 and t.category in DISCRETIONARY:
                 merchants[t.merchant] = merchants.get(t.merchant, 0) + 1
                 categories[t.category] = categories.get(t.category, 0.0) - t.amount
         top_merchant = max(merchants, key=merchants.get, default="Swiggy")
@@ -1344,6 +1345,24 @@ Rules:
         if not merchant:
             match = re.search(r"\b(?:paid|pay|sent|send)\s+([\w .&'-]+)$", q, re.IGNORECASE)
             merchant = match[1].strip() if match else None
+            if merchant:
+                merchant = re.split(
+                    r"\s+(?:last|this|past|in|during|between|from|over|today|yesterday)\b",
+                    merchant,
+                    maxsplit=1,
+                    flags=re.IGNORECASE,
+                )[0].strip()
+        if merchant:
+            # "Priya Nair in total", "Netflix so far": totals words are not part of a payee's name
+            merchant = (
+                re.sub(
+                    r"\s+(?:in total|total|overall|altogether|so far|till now|until now|ever|in all)$",
+                    "",
+                    merchant,
+                    flags=re.IGNORECASE,
+                ).strip()
+                or None
+            )
         category = None
         if merchant:
             # A category must be the entire filter, not a word embedded in a merchant's name.

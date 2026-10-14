@@ -14,6 +14,7 @@ export interface AgentCard {
   name: string;
   role: string;
   model: string;
+  group?: "pipeline" | "chat";
 }
 
 export interface Meta {
@@ -33,6 +34,9 @@ export interface Txn {
   description: string;
   merchant: string;
   amount: number;
+  direction: "debit" | "credit";
+  channel: string;
+  channel_label: string;
   category: string | null;
   category_label: string;
   category_source: string | null;
@@ -307,13 +311,38 @@ export interface ChatRoute {
   llm_model: string | null;
 }
 
+export interface ChatTableArtifact {
+  type: "table";
+  title: string;
+  columns: string[];
+  rows: (string | number | null)[][];
+  money_columns?: string[];
+  row_count: number;
+  total_rows: number;
+  truncated?: boolean;
+}
+
+export interface ChatChartArtifact {
+  type: "chart";
+  kind: "bar";
+  title: string;
+  x: string;
+  y: string;
+  data: Record<string, string | number>[];
+}
+
+export type ChatArtifact = ChatTableArtifact | ChatChartArtifact;
+
 export interface ChatMessage {
   id?: number;
   role: "user" | "assistant";
   content: string;
   trace?: ChatTrace[];
-  model?: string;
+  model?: string | null;
   route?: ChatRoute | null;
+  artifacts?: ChatArtifact[];
+  pipeline?: string[];
+  guard?: { checked: boolean; ok: boolean; label: string } | null;
   pending?: boolean;
 }
 

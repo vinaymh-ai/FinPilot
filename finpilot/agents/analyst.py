@@ -60,7 +60,8 @@ NOT_ANALYST = re.compile(
     r"\b(afford|what if|should i|(?:can|could) i (?:afford|buy|spend|go|take|book|travel|purchase|save)|"
     r"recommend|advice|advise|suggest|tips?|save money|"
     r"forecast|predict|projection|will i|going to|goal|on track|emergency fund|subscri\w*|"
-    r"why|explain|reason|poem|haiku|joke|write)\b",
+    r"why|explain|reason|poem|haiku|joke|write|"
+    r"anything (?:unusual|strange|odd|weird|suspicious|wrong)|charged twice|duplicate charges?)\b",
     re.IGNORECASE,
 )
 
@@ -337,7 +338,8 @@ def parse_question(question: str, kit: FinanceToolkit, retriever: LedgerRetrieve
     elif re.search(r"\b(average|avg|mean|typical|typically|usually)\b", q):
         measure = "avg"
     elif m := re.search(
-        r"\b(?:top|largest|biggest|highest|smallest|lowest|first|last|latest|recent)\s+(\d{1,3})\b", q
+        r"\b(?:top|largest|biggest|highest|smallest|lowest|first|last|latest|recent)\s+(\d{1,3})\b(?!\s*(?:days?|weeks?|months?|years?|quarters?)\b)",
+        q,
     ):
         limit = int(m.group(1))
         measure = "min" if re.search(r"\b(smallest|lowest)\b", q) else "max"

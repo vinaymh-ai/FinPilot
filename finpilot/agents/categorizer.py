@@ -286,6 +286,32 @@ class CategorizerAgent(BaseAgent):
             )
 
         tokens = set(norm.split())
+        if "P2A" in tokens and max(scores.values(), default=0.0) < 0.5:
+            # banks mark person-to-account payments explicitly ("IMPS/P2A/…")
+            return CatResult(
+                item.key,
+                merchant,
+                "transfers",
+                "p2p",
+                P2P_CONFIDENCE,
+                "Bank marks this as a person-to-account (P2A) transfer; the purpose isn't stated",
+            )
+        if (
+            credit
+            and abs(item.amount) >= 10000
+            and re.search(r"\b(?:NEFT|RTGS)\b", norm)
+            and re.search(
+                r"\b(?:LTD|LIMITED|PVT|PRIVATE|SOLUTIONS|TECHNOLOGIES|CORP|CORPORATION|INC|LLP)\b", norm
+            )
+        ):
+            return CatResult(
+                item.key,
+                merchant,
+                "income",
+                "keyword",
+                0.7,
+                "Large NEFT/RTGS credit from a company — most likely salary or a client payout",
+            )
         if "HOTEL" in tokens:  # amount-aware disambiguation (restaurant vs lodging)
             target = "dining" if abs(item.amount) < 2500 else "travel"
             scores[target] = 1 - (1 - scores.get(target, 0.0)) * 0.3
