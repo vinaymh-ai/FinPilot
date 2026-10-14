@@ -280,7 +280,7 @@ function MemoryCard() {
         subtitle="What Ask FinPilot remembers about you across conversations. Teach it in chat: “Hanumanthaiah is my landlord”, “remember that…”."
         action={
           items.length > 0 && (
-            <Button size="sm" variant="ghost" onClick={() => window.confirm("Forget everything FinPilot remembers about you?") && remove.mutate("all")}>
+            <Button size="sm" variant="ghost" className="shrink-0 whitespace-nowrap" onClick={() => window.confirm("Forget everything FinPilot remembers about you?") && remove.mutate("all")}>
               Forget all
             </Button>
           )

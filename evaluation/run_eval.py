@@ -474,18 +474,38 @@ def eval_chat_routing() -> dict[str, Any]:
     }
 
 
-def eval_narrations() -> dict[str, Any]:
+def eval_narrations(which: int = 1) -> dict[str, Any]:
     """Hand-labelled bank narrations in real Indian statement formats (independent of the generator)."""
-    from evaluation.narration_cases import FIRST_RUN, NARRATION_CASES
+    if which == 2:
+        from evaluation.narration_cases_2 import FIRST_RUN
+        from evaluation.narration_cases_2 import NARRATION_CASES_2 as NARRATION_CASES
 
+        banks = [
+            "SBI",
+            "HDFC",
+            "ICICI",
+            "Axis",
+            "Kotak",
+            "PNB",
+            "BoB",
+            "Canara",
+            "Union",
+            "IDFC First",
+            "Yes",
+        ]
+    else:
+        from evaluation.narration_cases import FIRST_RUN, NARRATION_CASES
+
+        banks = ["HDFC", "ICICI", "SBI", "Axis", "Kotak"]
+    graded = [(d, ch) for d, _, _, ch in NARRATION_CASES if ch]
     items = [CatItem(i, d, a) for i, (d, a, _, _) in enumerate(NARRATION_CASES)]
     res, _ = CategorizerAgent(router=OFFLINE, use_jev=False).categorize(items)
     cat_ok = [r.category == c for r, (_, _, c, _) in zip(res, NARRATION_CASES, strict=True)]
-    chan_ok = [detect_channel(d) == ch for d, _, _, ch in NARRATION_CASES]
+    chan_ok = [detect_channel(d) == ch for d, ch in graded]
     confident = [ok for ok, r in zip(cat_ok, res, strict=True) if r.confidence >= 0.7]
     return {
         "cases": len(NARRATION_CASES),
-        "banks": ["HDFC", "ICICI", "SBI", "Axis", "Kotak"],
+        "banks": banks,
         "category_accuracy": round(sum(cat_ok) / len(cat_ok), 4),
         "channel_accuracy": round(sum(chan_ok) / len(chan_ok), 4),
         "confident_share": round(len(confident) / len(cat_ok), 4),
@@ -498,7 +518,7 @@ def eval_narrations() -> dict[str, Any]:
         ],
         "channel_errors": [
             {"narration": d, "expected": ch, "got": detect_channel(d)}
-            for d, _, _, ch in NARRATION_CASES
+            for d, ch in graded
             if detect_channel(d) != ch
         ],
     }
@@ -561,14 +581,23 @@ def render_markdown(r: dict[str, Any]) -> str:
             ],
             "",
         ]
-    n = r.get("narrations")
-    if n:
+    for key, title, source in (
+        ("narrations", "Real-world narration benchmark — merchants", "evaluation/narration_cases.py"),
+        (
+            "narrations_2",
+            "Real-world narration benchmark — every kind of bank transaction",
+            "evaluation/narration_cases_2.py",
+        ),
+    ):
+        n = r.get(key)
+        if not n:
+            continue
         fr = n["first_run"]
         lines += [
-            "### Real-world narration benchmark",
+            f"### {title}",
             "",
             f"{n['cases']} hand-labelled narrations in {', '.join(n['banks'])} statement formats "
-            "(`evaluation/narration_cases.py`), independent of the synthetic generator.",
+            f"(`{source}`), independent of the synthetic generator.",
             "",
             "| Measurement | Category accuracy | Channel accuracy | Confident share | Precision when confident |",
             "|---|---|---|---|---|",
@@ -780,6 +809,7 @@ def main() -> None:
     chat = eval_chat_routing()
     print("narration benchmark …", flush=True)
     narrations = eval_narrations()
+    narrations_2 = eval_narrations(2)
     print("chat answer accuracy …", flush=True)
     chat_qa = eval_chat_qa()
     print("system one (jev) …", flush=True)
@@ -797,6 +827,7 @@ def main() -> None:
         "chat": chat,
         "chat_qa": chat_qa,
         "narrations": narrations,
+        "narrations_2": narrations_2,
         "jev": jev,
         "llm_note": note,
         "runtime_seconds": round(time.perf_counter() - t0, 1),

@@ -18,6 +18,13 @@ card spending", "biggest credit this year" or "food delivery this month vs last 
 the full table attached. Measured: **96.4% end-to-end answer accuracy** against ground truth, and every
 transaction carries its **debit/credit direction and payment channel** (UPI, card, NEFT, ATM, auto-debit…).
 
+**It remembers — and you are in control of categories.** Chats are threads like ChatGPT (new chat, history,
+search, pin, rename). A **Memory agent** resolves follow-ups ("the same person", "and in August?", "both"),
+recaps the conversation and keeps what you tell it ("Hanumanthaiah is my landlord") across chats. Retrieval is
+**semantic** ("coffee" → Starbucks, "cab rides" → Uber/Ola/Rapido, "hanumantha" → both spellings of that payee).
+You can create **your own categories**, write **rules** with a live preview, bulk-review uncertain
+transactions, and see **every category change** a transaction went through.
+
 **API agents with verified evidence.** Separate categorizer, analyzer, forecaster, advisor, auditor, chat
 planner, SQL analyst and digest prompts reason over real transaction evidence. Exact tools compute money; independent API
 checks reject unsupported generated claims. Missing balances limit affordability conclusions while
@@ -29,17 +36,21 @@ legacy integration remains documented below. See the current [agent design](docs
 | What-if Lab | Decision trail ("Why?") |
 |---|---|
 | ![What-if](docs/screenshots/what-if-lab.png) | ![Decision trail](docs/screenshots/decision-trail.png) |
-| **Agents: analysis pipeline + chat team** | **Ask FinPilot: SQL Analyst answer with the full table** |
-| ![Agents](docs/screenshots/agents.png) | ![Chat](docs/screenshots/chat.png) |
-| **Transactions: debit/credit, channel, category evidence** | **Self-evaluation** |
-| ![Transactions](docs/screenshots/transactions.png) | ![Evaluation](docs/screenshots/evaluation.png) |
+| **Ask FinPilot: conversation threads + memory (“the same person”, “and in the last 30 days?”)** | **Recap of the chat; long-term memory turned into a confirmed recategorisation** |
+| ![Chat](docs/screenshots/chat.png) | ![Chat recap](docs/screenshots/chat-recap.png) |
+| **Categories & rules: your own categories, rules, review queue** | **Rule preview before saving** |
+| ![Categories](docs/screenshots/categories.png) | ![Rule preview](docs/screenshots/rule-preview.png) |
+| **Transactions: bulk review (approve / move), debit/credit, channel** | **Category history: every change, by whom and why** |
+| ![Transactions](docs/screenshots/transactions.png) | ![Category history](docs/screenshots/category-history.png) |
+| **Agents: analysis pipeline + chat team** | **Self-evaluation** |
+| ![Agents](docs/screenshots/agents.png) | ![Evaluation](docs/screenshots/evaluation.png) |
 
 ---
 
 ## Contents
 1. [What it does — the story](#1-what-it-does--the-story)
 2. [Quick start](#2-quick-start)
-3. [How the agents cooperate](#3-how-the-agents-cooperate)
+3. [How the agents cooperate](#3-how-the-agents-cooperate) · [3a. Ask FinPilot — the chat team](#3a-ask-finpilot--the-chat-team) · [3b. Categories you control](#3b-categories-you-control)
 4. [System One decisions with Jev](#4-system-one-decisions-with-jev)
 5. [Forecasting & what-if simulation](#5-forecasting--what-if-simulation)
 6. [Auditable decision trail](#6-auditable-decision-trail)
@@ -176,12 +187,12 @@ graph LR
 | Agent | Its job | Own prompt / tools | Deterministic path | Where the LLM adds value |
 |---|---|---|---|---|
 | **Coordinator** | Plans the run (skip categorisation if nothing is new, add digest on scheduled runs), routes, records the trail | LangGraph conditional edges | always | — |
-| **Categorizer** | Label every transaction with category + confidence + reason | Full narration, direction, amount, dates and related transactions; category taxonomy | user corrections → trusted history → lexicon → keyword evidence | LLM reasoning for unresolved purposes, including payment platforms; Jev handles remaining uncertainty; provider payments with different descriptions stay separate |
+| **Categorizer** | Label every transaction with category + confidence + reason | Full narration, direction, amount, dates and related transactions; built-in **and your own** categories; your corrections as few-shot conventions | **your rules** → your corrections → trusted history → lexicon → keyword evidence → P2P detection | LLM reasoning for unresolved purposes, including payment platforms; Jev handles remaining uncertainty; provider payments with different descriptions stay separate. Every change is logged per transaction ([§3b](#3b-categories-you-control)) |
 | **Analyzer** | Behaviour over time; patterns & anomalies | Behaviour-profile prompt | rolling 30-day windows vs previous three (z-scores), median/MAD outliers, duplicate/fee/new-payee detection, recurring-series detection, subscription overlap & **usage evidence**, impulse tagging | 3–4 bullet behaviour profile (grounding-checked) |
 | **Forecaster** | Project the trajectory; simulate decisions | Forecast-narrative prompt | Monte-Carlo engine (below), goal funding, what-if, "wait until"/"cut" suggestions | Plain-language explanation (grounding-checked) |
 | **Advisor** | Turn signals into specific, ranked actions | Advisor prompt (rewrite, never invent numbers) | 11 candidate generators, priority scoring, feedback adaptation, goal-progress adaptation | Friendlier phrasing + weekly headline, rejected if any figure isn't in the evidence |
 | **Auditor** | Verify the decision trail | Own checks over this run's findings, forecast and ledger | always (no LLM needed) | — (deliberately independent of the models it audits) |
-| **Chat team** | Free-form money questions | Guardrails · Retriever · Planner (`query_ledger`, `get_spending`, `simulate`, …) · SQL Analyst · Composer/Verifier — see [§3a](#3a-ask-finpilot--the-chat-team) | Deterministic question parser → SQL, finance tools, templates | Planning, text-to-SQL with self-repair, natural answers; numeric and claim checks reject unsupported details |
+| **Chat team** | Free-form money questions, follow-ups, recaps | Memory · Guardrails · Retriever · Planner (`query_ledger`, `find_payees`, `get_spending`, `simulate`, …) · SQL Analyst · Composer/Verifier — see [§3a](#3a-ask-finpilot--the-chat-team) | Deterministic question parser → SQL, finance tools, templates | Planning, text-to-SQL with self-repair, natural answers; numeric and claim checks reject unsupported details |
 | **Digest** | Weekly proactive message: one insight + one action | Digest prompt | Template composer | Warm, specific opener (grounding-checked) |
 
 **One run, step by step (demo account):**
@@ -200,10 +211,12 @@ graph LR
 
 ```mermaid
 graph LR
-    Q([question]) --> G{guardrails}
+    Q([message + conversation]) --> M[Memory: resolve follow-ups, clarifications, recaps, facts]
+    M -- recap / remember / confirm --> MA([answered by memory])
+    M --> G{guardrails}
     G -- action / injection / off-topic --> R([refusal])
     G -- greeting / help --> C([capabilities from your data])
-    G --> RET[Retriever: merchants, categories, insights]
+    G --> RET[Retriever: payees by name, spelling and meaning; categories; insights]
     RET --> P{understood exactly?}
     P -- yes --> SQL[SQL Analyst: compiled query]
     P -- no --> PL[Planner LLM]
@@ -216,14 +229,49 @@ graph LR
 
 | Agent | Job | How it stays accurate |
 |---|---|---|
+| **Memory** | Working memory of each conversation (what the last answer was about, open questions) and long-term memory of what you taught it ("Hanumanthaiah is my landlord", "these two spellings are one person", "call me Vinay") | Resolves references ("the same person", "her", "those payments"), ellipsis ("and in August?", "what about Ola?" — the previous structured query with one aspect swapped), replies to clarifications ("both", "the first one"), recaps; deterministic, so follow-ups are reproducible. Facts are only saved from explicit statements, never from prompt-injection text, and can be listed/deleted in chat or **Settings → Memory** |
 | **Guardrails** | Refuse money-moving actions, prompt injection, off-topic chat | Runs before any model sees the message |
-| **Retriever (RAG)** | Link words to *your* merchants and categories ("swigy" → Swiggy, "medicines" → Health & Fitness, "card bill" → card repayments); pull relevant insights, recommendations and goals | Local BM25 + fuzzy matching over your ledger — works offline, reproducible |
+| **Retriever (RAG)** | Link words to *your* payees and categories — by spelling ("swigy" → Swiggy; "hanumantha" → Hanumanthaiah **and** Hanumanthiah, recognised as one payee), by meaning ("coffee" → Starbucks, "cab rides" → Uber/Ola/Rapido, "pizza" → Domino's, "petrol" → Shell + Sri Durga Fuels) and by memory ("my landlord"); pull relevant insights, recommendations and goals | **Hybrid semantic search**: TF-IDF sparse vectors over words, character n-grams and *meaning* (category vocabulary + merchant enrichment: what each brand or local business *is*), BM25 over narrations, an Indian-name consonant skeleton for spelling variants, plus **optional dense embeddings** (`EMBEDDING_MODEL`, any OpenAI-compatible `/embeddings`) fused by Reciprocal Rank Fusion. Works offline and reproducibly without the embedding API |
 | **SQL Analyst** | Any factual question: counts, lists, averages, max/min/first/last, breakdowns by month/category/merchant/weekday/channel, credits & income, period comparisons, weekend/late-night, amount thresholds | Runs in a **per-request in-memory SQLite that contains only your rows** (authorizer allows SELECT only, no PRAGMA/ATTACH, CPU/size limits). A deterministic parser compiles fully understood questions; anything else goes to LLM text-to-SQL with schema, date anchors and retrieved values, repaired from the database error up to twice. Unknown payees give "no matches", never a grand total |
 | **Planner** | Pick the specialist tools for everything else (`get_spending`, `rank_spending`, `simulate`, `get_forecast`, `get_goals`, `get_recommendations`, `get_insights`, `query_ledger`) | Only payees that appear in the question or in your data are accepted |
 | **Composer + Verifier** | Phrase the answer from verified results | Numeric grounding + an independent claim check; on rejection the exact deterministic answer is shown |
 
 Results come back as text **plus artifacts**: the full table of matching rows (CSV export) and a chart for
 time series — so "give me the transactions related to shopping" shows all of them, not the first ten.
+
+**Conversations like ChatGPT.** Every chat is a thread with an automatic title; the sidebar lists them by date
+(pinned first), with search across titles and messages, rename, pin and delete, and **New chat**. A conversation
+keeps its working memory across reloads (it is stored with each answer), so this works:
+
+> **You:** how much have I sent to hanumantha? → **₹25,500** to Hanumanthaiah / Hanumanthiah (*2 spellings of the same payee*)
+> **You:** how much have I received from the same person? → **₹1,500** (*memory: “the same person” → Hanumanthaiah and Hanumanthiah*)
+> **You:** and in the last 30 days? → the same question, new period
+> **You:** Hanumanthaiah is my landlord → saved; *“Shall I move 8 transactions (₹27,000, now under Transfers) to Rent & Housing?”* → **yes** → done, logged, and future imports follow
+> **You** (new chat, next week): how much did I pay my landlord this year? → answered from long-term memory
+> **You:** summarise our chat → a recap of every question with its key figure
+
+---
+
+## 3b. Categories you control
+
+The categorizer is a cascade with an explanation on every row; around it, FinPilot gives the user the controls the
+best transaction-classification products have (we studied 75way's, Trelium's, ZBrain's and HelloBooks'
+categorization agents):
+
+| Capability | What FinPilot does |
+|---|---|
+| **Your own categories** | Create "Household help", "Pet care", "Kids' school"… Each one *behaves like* a built-in parent you pick, so analytics stay correct (spending vs transfers, essential vs lifestyle, refunds). The categorizer's model sees your categories and their descriptions; chat and the SQL view know them by name |
+| **Your rules** | "Payee contains KAMALA → Household help", "narration has the word SCHOOL and amount ≥ 10,000 → Education", debit/credit and channel filters. Rules run **first**, apply to existing rows on save (with a live preview of what changes) and to every future import. No user regex — terms are matched as words |
+| **Learning from corrections** | Fix one transaction or a merchant once; it becomes merchant memory *and* a few-shot convention the model follows for similar payees |
+| **Review queue** | Anything below 70% confidence is flagged instead of guessed; review it with **bulk approve / bulk move** (optionally "remember these merchants") |
+| **Audit trail** | Every category change — categorizer run, your rule, your edit, a bulk review, a chat confirmation — is recorded with before/after, source, confidence and reason (`GET /api/transactions/{id}/history`, the ⟲ button on each row) |
+| **Chat-driven fixes** | "Mark Hanumanthaiah as rent" or "Priya is my sister" → FinPilot proposes the change, you confirm with "yes" |
+| **Any kind of bank transaction** | Salary, dividends, interest, tax payments/refunds (new **Taxes** category), bank charges and GST on charges, reversals and refunds, self-transfers, wallet loads, SIPs/FDs/RDs/NPS/PPF/digital gold, EMIs, insurance, card bills, rent platforms, FASTag/metro/fuel, school fees, donations — measured on a second hand-labelled benchmark across 11 banks ([§7](#7-self-evaluation-results)) |
+
+How we used the references: a findings ledger (REA's method — *observations vs inferences vs unknowns*, each
+claim tied to evidence) over the four product pages, then a gap checklist. Their pages describe *what* the products
+do (rules + history + AI, confidence-gated review, correction memory, user taxonomies, audit trails), not their
+internals; split transactions and receipt matching are left on the roadmap.
 
 ---
 
@@ -333,9 +381,22 @@ hold-out: the evaluation fails loudly if any of them ever leaks into the lexicon
 formats, independent of the generator): first held-out run **91.0%** category / 97.0% channel / 98.8% precision
 when confident; after fixing the generic parsing bugs it exposed, 98.0% / 99.0% / 100%.
 
+**Every kind of bank transaction** (`evaluation/narration_cases_2.py`, 120 hand-labelled narrations from 11 banks —
+salary/dividend/interest, tax payments and refunds, bank charges and GST on charges, reversals, self-transfers,
+wallet loads, SIP/FD/RD/NPS/digital gold, EMIs, insurance, card bills, rent platforms, FASTag/metro/fuel, school
+fees, donations): first run **85.0%** category / 96.5% channel / 96.9% precision when confident. It exposed
+missing *kinds* of transaction (no Taxes category, bank-charge wording, self-transfers, wallet loads, deposits,
+the EAW ATM code) — after adding them, **100%** / 100% / 100% with 95.8% of rows confident. Both numbers are
+reported because the second is measured on the set that motivated the fixes.
+
 **Ask FinPilot end-to-end:** **96.4%** of 28 questions answered with exactly the right figures, where the
 expected values are computed from the generator's ground-truth categories, merchants and times (the one miss
 is a long-tail shop the deterministic categorizer leaves for review). Tool routing: 20/20.
+
+**Conversation memory:** 4 multi-turn chats (10 turns) where later turns only make sense with memory — “and in
+August?”, “what about dining?”, “how many times did I pay her?”, “what about Ola?”, “summarise our chat”: **100%**
+of turns correct (follow-ups 6/6). First run, before fixing what it exposed (ellipsis after a spending-tool answer
+had no structured focus to inherit): 80% overall, 67% of follow-ups.
 
 **Detectors:**
 
@@ -469,7 +530,12 @@ Interactive docs at **`/docs`**. Highlights:
 | `POST /api/simulate` | what-if with any combination of adjustments |
 | `GET/PATCH /api/recommendations[/{id}]` | advice + feedback (accepted / done / dismissed) |
 | `GET/POST/PATCH/DELETE /api/goals` | goals with live projections and history |
-| `POST /api/chat` | multi-agent assistant: answer + tool/SQL trace + table/chart `artifacts` + agent `pipeline` |
+| `POST /api/chat` | multi-agent assistant: answer + tool/SQL trace + table/chart `artifacts` + agent `pipeline` + `memory` (what earlier turns resolved, facts saved); omit `session_id` to start a new conversation |
+| `GET /api/chat/sessions?q=` · `PATCH`/`DELETE /api/chat/sessions/{id}` · `GET /api/chat/{id}` | conversation threads: list/search, rename, pin, delete, history |
+| `GET /api/chat/memory` · `DELETE /api/chat/memory[/{id}]` | long-term memory the chat keeps about you |
+| `GET/POST/PATCH/DELETE /api/categories[/{id}]` | your own categories (each behaves like a built-in parent) + counts, rules and the review count |
+| `POST /api/category-rules/preview` · `GET/POST/PATCH/DELETE /api/category-rules[/{id}]` | categorization rules with a live preview; applied to existing rows and future imports |
+| `POST /api/transactions/bulk` · `GET /api/transactions/{id}/history` | bulk approve / move from the review queue; per-transaction category audit trail |
 | `GET /api/transactions?direction=debit\|credit&channel=upi` | filter by money in/out and payment rail; response includes debit/credit totals |
 | `GET /api/digests` · `POST /api/digests/send-now` · `PUT /api/scheduler` | proactive delivery |
 | `GET/PUT /api/settings…` · `GET /api/llm/models` · `POST /api/settings/llm/test` | profile & provider routing |
@@ -483,17 +549,19 @@ Interactive docs at **`/docs`**. Highlights:
 finpilot/
   agents/       coordinator (LangGraph) · categorizer · analyzer · forecaster · advisor · auditor · digest
                 chat (guardrails, planner, composer/verifier) · analyst (SQL Analyst: parser + text-to-SQL)
-  domain/       taxonomy · merchant lexicon · description normaliser · recurring detection · stats
+                memory (conversation focus, follow-ups, recaps, long-term facts)
+  domain/       taxonomy (+ custom categories) · merchant lexicon · enrichment · user rules · normaliser · recurring
   decisions/    Jev client (Mesh /v1/evaluate) · question specs · confidence policy · faithfulness guard · cost model
   llm/          provider registry · router (fallback, cache, telemetry) · grounding check
   observability/ request context · access-log middleware · raw call recorder · LangSmith tracing
   services/     statements/ (format readers, column mapping, PDF text parser) · ingestion · auth · synthetic data
                 ledger_sql (sandboxed per-user SQL view) · retrieval (value linking + BM25 knowledge)
+                semantic (hybrid sparse vectors, name variants, optional dense embeddings + RRF)
                 repository · toolkit (chat tools) · scheduler (+ retention) · notifier · seed
   api/          FastAPI routers + serializers        main.py · models.py · config.py · db.py
 evaluation/     run_eval.py · jev_eval.py + jev_cases.py (labelled sets) · results/ (REPORT.md, latest.json)
 frontend/       React 19 + Vite + TypeScript + Tailwind 4 + Recharts + TanStack Query
-tests/          256 tests: domain logic, agents (fake LLM + simulated /v1/evaluate), Jev, statement formats, accounts
+tests/          287 tests: domain logic, agents (fake LLM + simulated /v1/evaluate), Jev, statement formats, accounts
                 & isolation, observability, API
 ```
 

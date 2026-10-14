@@ -7,13 +7,13 @@ import { titleCase } from "../lib/format";
 
 const pctv = (x: number | null | undefined, d = 0) => (x == null ? "–" : `${(x * 100).toFixed(d)}%`);
 
-function NarrationSection({ n }: { n: any }) {
+function NarrationSection({ n, title = "Real-world narration benchmark", file = "evaluation/narration_cases.py" }: { n: any; title?: string; file?: string }) {
   const fr = n.first_run;
   return (
     <Card>
       <CardHeader
-        title="Real-world narration benchmark"
-        subtitle={<>{n.cases} hand-labelled narrations in {n.banks.join(", ")} formats · <code>evaluation/narration_cases.py</code></>}
+        title={title}
+        subtitle={<>{n.cases} hand-labelled narrations in {n.banks.join(", ")} formats · <code>{file}</code></>}
         icon={<Landmark className="size-4" />}
       />
       <div className="overflow-x-auto p-5 pt-3">
@@ -274,7 +274,9 @@ export default function Evaluation() {
             <Stat
               label="Real bank narrations"
               value={pctv(data.narrations.category_accuracy, 1)}
-              hint={`first held-out run ${pctv(data.narrations.first_run.category_accuracy, 1)} · ${data.narrations.cases} cases`}
+              hint={`first held-out run ${pctv(data.narrations.first_run.category_accuracy, 1)} · ${data.narrations.cases} cases${
+                data.narrations_2 ? ` · all transaction types ${pctv(data.narrations_2.category_accuracy, 1)} (first run ${pctv(data.narrations_2.first_run.category_accuracy, 1)})` : ""
+              }`}
               icon={<Landmark className="size-4" />}
             />
           )}
@@ -297,7 +299,10 @@ export default function Evaluation() {
       {(data.chat_qa || data.narrations) && (
         <div className="grid gap-6 xl:grid-cols-2">
           {data.chat_qa && <ChatQASection qa={data.chat_qa} />}
-          {data.narrations && <NarrationSection n={data.narrations} />}
+          {data.narrations && <NarrationSection n={data.narrations} title="Narration benchmark — merchants" />}
+          {data.narrations_2 && (
+            <NarrationSection n={data.narrations_2} title="Narration benchmark — every kind of bank transaction" file="evaluation/narration_cases_2.py" />
+          )}
         </div>
       )}
 

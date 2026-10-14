@@ -207,6 +207,7 @@ class CategorizerAgent(BaseAgent):
 
     # ------------------------------------------------------------------ deterministic stages
     def rule_categorize(self, item: CatItem) -> CatResult:
+        credit = item.amount > 0
         merchant, norm = merchant_key(item.description)
         mk = merchant.upper()
         provider = payment_provider(item.description)
@@ -259,7 +260,6 @@ class CategorizerAgent(BaseAgent):
                 f"Same merchant was categorised as {BY_ID[cat].label} before",
             )
 
-        credit = item.amount > 0
         if is_card_repayment(item.description):
             return CatResult(
                 item.key,
@@ -271,6 +271,18 @@ class CategorizerAgent(BaseAgent):
             )
         if provider:
             purpose = match_merchant(norm)
+            if purpose and (
+                purpose.name in ("Wallet top-up", "Self transfer", "Tax refund")
+                or (purpose.name == "Refund / cashback" and credit)
+            ):
+                return CatResult(
+                    item.key,
+                    merchant,
+                    purpose.category,
+                    "rule",
+                    0.9,
+                    f"Explicit purpose: {purpose.name} via {provider}",
+                )
             if purpose and purpose.category not in {"transfers", "income", "credit_card_payment"}:
                 return CatResult(
                     item.key,

@@ -113,6 +113,14 @@ CATEGORIES: list[Category] = [
     ),
     Category("cash", "Cash Withdrawal", "other", "#78716c", "banknote", "ATM withdrawals"),
     Category(
+        "taxes",
+        "Taxes",
+        "financial",
+        "#b45309",
+        "receipt",
+        "Income tax, advance tax, GST, property tax, traffic challans and other government dues",
+    ),
+    Category(
         "fees",
         "Fees & Charges",
         "essential",

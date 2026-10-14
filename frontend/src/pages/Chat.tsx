@@ -428,7 +428,7 @@ export default function Chat() {
             </div>
           </div>
           {sessionId && (
-            <Button variant="ghost" size="sm" onClick={() => navigate("/chat")}>
+            <Button variant="ghost" size="sm" className="shrink-0 whitespace-nowrap" onClick={() => navigate("/chat")}>
               <SquarePen className="size-4" /> New chat
             </Button>
           )}

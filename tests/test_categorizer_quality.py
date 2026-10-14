@@ -59,6 +59,19 @@ def test_phrases_hide_the_words_inside_them():
         ("BY TRANSFER-NEFT*HDFC0000001*N123456789*INITECH SOLUTIONS*", 98000, "income"),
         ("ICICI PRUDENTIAL MUTUAL FUND SIP", -5000, "investments"),
         ("ICICI PRU LIFE INSURANCE PREMIUM", -5000, "insurance"),
+        # every kind of bank transaction, not just merchants
+        ("TAX PAYMENT-CBDT-ITNS280-ADVANCE TAX", -25000, "taxes"),
+        ("NEFT-IN-CBDT INCOME TAX REFUND AY 2026-27", 18450, "income"),
+        ("ATM WDL CHARGES 3 TXNS", -63, "fees"),
+        ("GST @18% on Charge", -89.82, "fees"),
+        ("FT - DR - 50100123456789 - SELF", -20000, "transfers"),
+        ("PAYTM WALLET TOPUP", -2000, "transfers"),
+        ("AMAZON PAY BALANCE LOAD", -1000, "transfers"),
+        ("PAYTM CASHBACK RECEIVED", 50, "income"),
+        ("Sweep Trf To: 1234567890 (FD)", -50000, "investments"),
+        ("SOVEREIGN GOLD BOND SUBSCRIPTION", -6300, "investments"),
+        ("EAW-416021XXXXXX1234-S1AWBL01-BANGALORE", -3000, "cash"),
+        ("IB BILLPAY DR-HDFCQH-123456XXXXXX1234", -21000, "credit_card_payment"),
     ],
 )
 def test_generic_rules(description, amount, category):
@@ -141,6 +154,9 @@ def test_confident_lexicon_rule_yields_only_to_a_confident_model(fake_router_fac
         ("BIL/ONL/000123/BESCOM/ELECTRICITY", "netbanking"),
         ("CREDIT INTEREST", "bank"),
         ("CHQ DEP 000123 CLG", "cheque"),
+        ("DEBIT-ACHDr HDFC0000001 HDFC BANK HOME LOAN EMI", "auto_debit"),
+        ("EAW-416021XXXXXX1234-S1AWBL01-BANGALORE", "atm"),
+        ("CARD TXN AT NETFLIX.COM", "card"),
     ],
 )
 def test_channel_detection(description, channel):

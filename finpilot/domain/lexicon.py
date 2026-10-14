@@ -42,6 +42,51 @@ def _compiled(pattern: str) -> re.Pattern[str]:
 R = MerchantRule
 
 MERCHANT_RULES: list[MerchantRule] = [
+    # ---- Bank & government money movements (checked first: they name the purpose explicitly) ---
+    R(
+        r"(?:INCOME ?TAX|ITD|CBDT|IT|TAX) ?REFUND|REFUND (?:ITD|CBDT|INCOME ?TAX)",
+        "Tax refund",
+        "income",
+    ),
+    R(
+        r"INCOME ?TAX|ADVANCE ?TAX|SELF ?ASSESSMENT ?TAX|TDS ?PAYMENT|CBDT|ITNS ?\d*|OLTAS|CHALLAN ?28\d|"
+        r"GST ?PAYMENT|GST ?CHALLAN|GSTN|CPIN|PROPERTY ?TAX|PROFESSIONAL ?TAX|PROF ?TAX|ROAD ?TAX|"
+        r"TRAFFIC ?(?:CHALLAN|FINE|POLICE)|E ?CHALLAN|MUNICIPAL ?TAX",
+        "Tax payment",
+        "taxes",
+    ),
+    R(
+        r"(?:ATM|SMS|IMPS|NEFT|RTGS|ECS|NACH|ACH|CHQ|CHEQUE|DEBIT ?CARD|DC|CARD|MIN(?:IMUM)? ?BAL(?:ANCE)?|AMB|"
+        r"NON ?MAINT\w*|FOLIO|STOP ?PAYMENT|DUPLICATE ?STATEMENT|CASH ?HANDLING|LOCKER)(?: \w+){0,3} "
+        r"(?:CHARGES?|CHGS|CHRGS|CHG|FEES?)|GST ?\d* ?ON ?(?:CHARGES?|CHGS|FEES?)|"
+        r"(?:CHQ|CHEQUE|ECS|NACH|ACH|SI) ?(?:RETURN|BOUNCE|DISHONOU?R)\w*",
+        "Bank fee",
+        "fees",
+    ),
+    R(
+        r"(?:PAYTM|MOBIKWIK|PHONEPE|AMAZON ?PAY|FREECHARGE|OLA ?MONEY|AIRTEL ?MONEY) ?(?:WALLET ?)?"
+        r"(?:TOP ?UP|TOPUP|LOAD|ADD ?MONEY|BALANCE ?LOAD|RECHARGE)|WALLET ?(?:TOP ?UP|TOPUP|LOAD)|ADD ?MONEY ?TO ?WALLET",
+        "Wallet top-up",
+        "transfers",
+    ),
+    R(
+        r"(?:FT|TRF|TRANSFER|INFT|IMPS|NEFT|RTGS|IB|TPT)(?: \w+){0,4} SELF|SELF ?(?:TRANSFER|TRF|A ?C)|OWN ?A ?C|"
+        r"TO ?OWN ?(?:ACCOUNT|AC)",
+        "Self transfer",
+        "transfers",
+    ),
+    R(
+        r"SWEEP ?(?:TRF|TRANSFER|OUT|IN)|(?:TRF ?TO|TO) (?:FD|TD|RD)|FIXED ?DEPOSIT|TERM ?DEPOSIT|"
+        r"FD ?(?:BOOKING|CREATION|OPENED|OPENING)|RD ?(?:INSTAL\w*|DEPOSIT)",
+        "Fixed / recurring deposit",
+        "investments",
+    ),
+    R(
+        r"NPS ?(?:CONTRIBUTION|TRUST|TIER)|NSDL ?CRA|PFRDA|PROTEAN ?CRA|KFIN ?CRA|SAFE ?GOLD|AUGMONT|MMTC ?PAMP|"
+        r"DIGITAL ?GOLD|DIGI ?GOLD|SOVEREIGN ?GOLD ?BOND|GOLD ?BOND|SGB",
+        "Pension / gold investment",
+        "investments",
+    ),
     # ---- Memberships (before their parent brands) -------------------------------------------
     R(r"SWIGGY ?ONE", "Swiggy One", "subscriptions", "delivery_membership", "Swiggy"),
     R(r"ZOMATO ?(GOLD|PRO)", "Zomato Gold", "subscriptions", "delivery_membership", "Zomato"),
@@ -348,7 +393,7 @@ MERCHANT_RULES: list[MerchantRule] = [
         "investments",
     ),
     # ---- Cash ---------------------------------------------------------------------------------
-    R(r"ATM ?(WDL|WITHDRAWAL|CASH)?|CASH ?(WDL|WITHDRAWAL)|NWD|ATW", "ATM withdrawal", "cash"),
+    R(r"ATM ?(WDL|WITHDRAWAL|CASH)?|CASH ?(WDL|WITHDRAWAL)|NWD|ATW|EAW", "ATM withdrawal", "cash"),
     R(r"CASH ?DEP(OSIT)?|BY ?CASH ?DEPOSIT|CDM ?DEPOSIT", "Cash deposit", "transfers"),
     # ---- Fees ---------------------------------------------------------------------------------
     R(

@@ -149,7 +149,7 @@ export function RuleDrawer({ draft, onClose, categories }: { draft: RuleDraft | 
         </p>
         <div>
           <Label hint="comma-separated; any of them matches">When the</Label>
-          <div className="grid gap-2 sm:grid-cols-[160px_160px_1fr]">
+          <div className="grid gap-2 sm:grid-cols-[200px_160px_1fr]">
             <Select value={f.field} onChange={(e) => set({ field: e.target.value as RuleDraft["field"] })} aria-label="Field">
               <option value="any">payee or narration</option>
               <option value="merchant">payee name</option>
@@ -409,7 +409,7 @@ export default function Categories() {
                           <div className="min-w-0">
                             <div className="flex items-center gap-2 text-[13px] font-medium">
                               <span className="size-2.5 shrink-0 rounded-full" style={{ background: c.color }} />
-                              <span className="truncate">{c.label}</span>
+                              <span className="break-words">{c.label}</span>
                               {c.custom && <Badge tone="violet">yours</Badge>}
                             </div>
                             <div className="truncate text-[11.5px] text-muted">

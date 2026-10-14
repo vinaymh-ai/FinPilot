@@ -231,7 +231,7 @@ export default function Transactions() {
   const qc = useQueryClient();
   const refresh = useRefreshAll();
   const [params0] = useSearchParams();
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(params0.get("q") ?? "");
   const [category, setCategory] = useState(params0.get("category") ?? "");
   const [source, setSource] = useState("");
   const initialFlag = params0.get("flag");
