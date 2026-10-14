@@ -180,12 +180,18 @@ def test_embeddings() -> dict[str, Any]:
     t0 = time.perf_counter()
     try:
         (vec,) = r.embed(["coffee at a cafe"], agent="retriever")
-        return {
+        out: dict[str, Any] = {
             "ok": True,
             "target": target,
             "dimensions": len(vec),
             "latency_ms": int((time.perf_counter() - t0) * 1000),
         }
+        if (get_settings().embedding_model or "").lower().startswith("auto"):
+            out["warning"] = (
+                "EMBEDDING_MODEL is 'auto': if the gateway's default model changes, stored vectors stop "
+                "matching. Pin one model (e.g. gemini-embedding-001)."
+            )
+        return out
     except LLMError as exc:
         return {"ok": False, "target": target, "error": str(exc)[:400]}
 

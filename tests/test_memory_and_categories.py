@@ -496,3 +496,85 @@ def test_questions_that_look_like_commands_are_not_recategorisations(client):
     assert "category" not in july["answer"].lower() or "Dining" in july["answer"]
     possessive = ask(client, "mark Hanumanthaiah's payments as rent")
     assert "Shall I move" in possessive["answer"] and "Rent & Housing" in possessive["answer"]
+
+
+class _FakeEmbeddings:
+    """An OpenAI-style client whose /embeddings records batch sizes (and can fail on a given call)."""
+
+    def __init__(self, dims: int = 3, fail_on: int | None = None):
+        self.calls: list[int] = []
+        self.dims, self.fail_on = dims, fail_on
+        self.embeddings = self
+
+    def create(self, model, input):  # noqa: A002 - mirrors the OpenAI signature
+        from types import SimpleNamespace
+
+        self.calls.append(len(input))
+        if self.fail_on is not None and len(self.calls) == self.fail_on:
+            raise RuntimeError("429 rate limited")
+        data = [SimpleNamespace(index=i, embedding=[float(len(t))] * self.dims) for i, t in enumerate(input)]
+        return SimpleNamespace(data=data, usage=SimpleNamespace(prompt_tokens=len(input)))
+
+
+def _embedding_router(**overrides):
+    from finpilot.config import Settings
+    from finpilot.llm.client import LLMRouter
+
+    return LLMRouter(
+        Settings(
+            llm_enabled=True,
+            embedding_model="gemini-embedding-001",
+            embedding_provider="freellmapi",
+            freellmapi_api_key="test-key",
+            **overrides,
+        )
+    )
+
+
+def test_embeddings_are_sent_in_batches_and_resume_after_a_failure(monkeypatch):
+    from finpilot.llm.client import LLMError
+
+    router = _embedding_router()
+    assert router.describe_embeddings() == "freellmapi:gemini-embedding-001"
+    texts = [f"payee {i}" for i in range(150)]
+    flaky = _FakeEmbeddings(fail_on=2)
+    monkeypatch.setattr(router, "_client", lambda spec: flaky)
+    with pytest.raises(LLMError):
+        router.embed(texts)
+    assert flaky.calls == [64, 64]  # the first batch was cached before the second one failed
+    router._embed_down_until = 0.0
+    ok = _FakeEmbeddings()
+    monkeypatch.setattr(router, "_client", lambda spec: ok)
+    vectors = router.embed(texts)
+    assert ok.calls == [64, 22] and len(vectors) == 150 and all(len(v) == 3 for v in vectors)
+
+
+def test_dense_retrieval_switches_off_when_vector_sizes_differ(caplog):
+    from collections import Counter
+    from types import SimpleNamespace
+
+    from finpilot.services.semantic import SemanticIndex
+
+    class Router:
+        def embeddings_available(self):
+            return True
+
+        def embed(self, texts, agent="retriever"):
+            return [[1.0, 0.0, 0.0] for _ in texts] if len(texts) > 1 else [[1.0, 0.0]]
+
+    stats = {n: SimpleNamespace(categories=Counter({"transport": 1})) for n in ("Uber", "Ola")}
+    index = SemanticIndex(stats, {"Uber": ["UBER TRIP"], "Ola": ["OLA CABS"]}, router=Router())
+    assert index._dense_ranking("cab") == []
+    assert "embedding sizes differ" in caplog.text
+
+
+def test_embeddings_test_warns_about_an_auto_model(client, monkeypatch):
+    from finpilot.config import get_settings
+    from finpilot.llm.client import get_router
+
+    router = get_router()
+    monkeypatch.setattr(get_settings(), "embedding_model", "auto")
+    monkeypatch.setattr(router, "describe_embeddings", lambda: "freellmapi:auto")
+    monkeypatch.setattr(router, "embed", lambda texts, agent="retriever": [[0.1, 0.2]])
+    out = client.post("/api/settings/embeddings/test").json()
+    assert out["ok"] and out["dimensions"] == 2 and "Pin one model" in out["warning"]

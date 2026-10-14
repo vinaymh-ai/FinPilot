@@ -158,17 +158,20 @@ Chat links your words to payees and categories with a **local hybrid index** tha
 spelling variants ("hanumantha" → Hanumanthaiah *and* Hanumanthiah), TF-IDF vectors over words and character
 n-grams, and *meaning* features (category vocabulary plus what each brand or local business is — "coffee" →
 Starbucks, "cab rides" → Uber/Ola/Rapido). An embedding model adds dense vectors on top, fused by Reciprocal
-Rank Fusion. FreeLLMAPI serves chat only, so point embeddings at a provider with `/embeddings`:
+Rank Fusion. Any OpenAI-compatible `/v1/embeddings` works — FreeLLMAPI included:
 
 ```dotenv
-# free and local (run `ollama pull nomic-embed-text` first)
-EMBEDDING_PROVIDER=ollama
-EMBEDDING_MODEL=nomic-embed-text
-# …or Google's free tier:  EMBEDDING_PROVIDER=gemini  EMBEDDING_MODEL=gemini-embedding-001  GEMINI_API_KEY=…
-# …or OpenAI:              EMBEDDING_PROVIDER=openai  EMBEDDING_MODEL=text-embedding-3-small  OPENAI_API_KEY=…
+# through your FreeLLMAPI key (pin a family from its Models → Embeddings page; bge-m3 also works)
+EMBEDDING_PROVIDER=freellmapi
+EMBEDDING_MODEL=gemini-embedding-001
+# …or free and local:  EMBEDDING_PROVIDER=ollama  EMBEDDING_MODEL=nomic-embed-text  (ollama pull nomic-embed-text)
+# …or OpenAI:          EMBEDDING_PROVIDER=openai  EMBEDDING_MODEL=text-embedding-3-small  OPENAI_API_KEY=…
 ```
 
-Leave `EMBEDDING_PROVIDER` blank to reuse `LLM_PROVIDER`. Compose reaches Ollama on your machine through
+Pin one model rather than `auto`: vectors from different models cannot be compared, so if a gateway's default
+changed under `auto`, dense retrieval would switch itself off. Payees are embedded in batches of 64 and cached per
+model, so after the first question only the new question is embedded (well within a 1,000-requests-a-day free
+tier). Leave `EMBEDDING_PROVIDER` blank to reuse `LLM_PROVIDER`. Compose reaches Ollama on your machine through
 `http://host.docker.internal:11434/v1` (`DOCKER_OLLAMA_BASE_URL`). Check the setup with **Settings → Test
 embeddings**. If the endpoint fails or takes longer than `EMBEDDING_TIMEOUT_S` (8 s), chat skips dense retrieval
 for five minutes and answers from the local index, so a dead endpoint never slows the chat down.

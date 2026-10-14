@@ -195,11 +195,15 @@ class SemanticIndex:
         except Exception as exc:  # noqa: BLE001 - dense retrieval is an optional booster
             log.info("dense retrieval unavailable: %s", exc)
             return []
+        if not qv or any(len(v) != len(qv) for v in self._dense):
+            # vectors from different models (e.g. an "auto" model whose family changed) are not comparable
+            log.warning("dense retrieval skipped: embedding sizes differ — pin EMBEDDING_MODEL to one model")
+            return []
         qn = math.sqrt(sum(x * x for x in qv)) or 1.0
         sims = []
         for name, v in zip(self.names, self._dense, strict=True):
             vn = math.sqrt(sum(x * x for x in v)) or 1.0
-            sims.append((sum(a * b for a, b in zip(qv, v, strict=False)) / (qn * vn), name))
+            sims.append((sum(a * b for a, b in zip(qv, v, strict=True)) / (qn * vn), name))
         sims.sort(reverse=True)
         return [n for s, n in sims[:20] if s > 0.2]
 

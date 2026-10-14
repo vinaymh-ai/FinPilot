@@ -386,9 +386,13 @@ export default function SettingsPage() {
     onError: (e: Error) => toast.error(e.message),
   });
   const testEmbeddings = useMutation({
-    mutationFn: () => api.post<{ ok: boolean; target: string | null; dimensions?: number; latency_ms?: number; error?: string }>("/settings/embeddings/test"),
+    mutationFn: () =>
+      api.post<{ ok: boolean; target: string | null; dimensions?: number; latency_ms?: number; error?: string; warning?: string }>(
+        "/settings/embeddings/test",
+      ),
     onSuccess: (r) => {
-      if (r.ok) toast.success(`Embeddings work: ${r.target} → ${r.dimensions} dimensions in ${r.latency_ms} ms`);
+      if (r.ok && r.warning) toast.warning(`Embeddings work: ${r.target} → ${r.dimensions} dimensions`, { description: r.warning });
+      else if (r.ok) toast.success(`Embeddings work: ${r.target} → ${r.dimensions} dimensions in ${r.latency_ms} ms`);
       else toast.error("Embeddings unavailable", { description: r.error });
       qc.invalidateQueries({ queryKey: ["settings"] });
     },

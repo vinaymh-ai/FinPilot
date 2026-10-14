@@ -83,8 +83,8 @@ class Settings(BaseSettings):
     chat_fast_model: str | None = None  # LLM for simple escalated questions (Jev complexity score)
     # Dense embeddings for chat retrieval (optional). Any OpenAI-compatible /embeddings model, e.g.
     # "openai/text-embedding-3-small" on Mesh, "text-embedding-3-small" on OpenAI, "gemini-embedding-001" on
-    # Gemini, "nomic-embed-text" on Ollama. EMBEDDING_PROVIDER picks the gateway (default: LLM_PROVIDER) —
-    # needed when the chat provider serves no embeddings (FreeLLMAPI). Unset model → local retrieval only.
+    # Gemini or FreeLLMAPI, "nomic-embed-text" on Ollama. EMBEDDING_PROVIDER picks the gateway (default:
+    # LLM_PROVIDER). Pin one model, not "auto". Unset model → local retrieval only.
     embedding_model: str | None = None
     embedding_provider: str | None = None
     embedding_timeout_s: float = 8.0  # embeddings are optional: a slow endpoint must never stall chat

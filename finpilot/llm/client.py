@@ -387,6 +387,7 @@ class LLMRouter:
 
     # ----------------------------------------------------------------------------- embeddings
     EMBED_COOLDOWN_S = 300.0  # after a failure, skip dense retrieval for this long (chat stays fast)
+    EMBED_BATCH_SIZE = 64  # inputs per request: Gemini, Cohere and Workers AI reject batches over ~100
 
     def embedding_target(self) -> tuple[ProviderSpec, str] | None:
         """(provider, model) for embeddings: EMBEDDING_PROVIDER if set, else the chat provider."""
@@ -424,12 +425,17 @@ class LLMRouter:
         out: list[list[float] | None] = [json.loads(cached[k]) if k in cached else None for k in keys]
         missing = [i for i, v in enumerate(out) if v is None]
         if missing:
-            started = time.perf_counter()
             client = self._client(spec)
             if hasattr(client, "with_options"):  # a short timeout and no retries: embeddings are optional
                 client = client.with_options(timeout=self.settings.embedding_timeout_s, max_retries=0)
+        for start in range(0, len(missing), self.EMBED_BATCH_SIZE):
+            batch = missing[start : start + self.EMBED_BATCH_SIZE]
+            started = time.perf_counter()
             try:
-                resp = client.embeddings.create(model=model, input=[texts[i] for i in missing])
+                resp = client.embeddings.create(model=model, input=[texts[i] for i in batch])
+                vectors = [d.embedding for d in sorted(resp.data, key=lambda d: d.index)]
+                if len(vectors) != len(batch):
+                    raise ValueError(f"{len(vectors)} vectors for {len(batch)} inputs")
             except Exception as exc:  # noqa: BLE001 - surfaced as LLMError, callers fall back
                 self._embed_down_until = time.monotonic() + self.EMBED_COOLDOWN_S
                 log.warning(
@@ -437,7 +443,6 @@ class LLMRouter:
                 )
                 raise LLMError(f"embedding call failed: {exc}") from exc
             self._embed_down_until = 0.0
-            vectors = [d.embedding for d in sorted(resp.data, key=lambda d: d.index)]
             tokens = getattr(getattr(resp, "usage", None), "prompt_tokens", 0) or 0
             self._record(
                 agent,
@@ -450,7 +455,7 @@ class LLMRouter:
                 ),
                 success=True,
             )
-            for i, vec in zip(missing, vectors, strict=True):
+            for i, vec in zip(batch, vectors, strict=True):  # cached per batch: a later failure resumes here
                 out[i] = vec
                 if self.settings.llm_cache_enabled:
                     self._cache_put(keys[i], model, json.dumps(vec))
