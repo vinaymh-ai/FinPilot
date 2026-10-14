@@ -374,3 +374,125 @@ def test_custom_category_description_can_be_cleared_but_is_kept_when_omitted(cli
     assert kept["description"] == "Vet bills"
     cleared = client.patch("/api/categories/u1_pets", json={"description": None}).json()["category"]
     assert cleared["description"].startswith("Your category")  # back to the default text
+
+
+# ---------------------------------------------------------------------------- chat recategorisation & follow-ups
+def test_mark_a_payee_as_a_new_category_creates_it_after_confirmation(client):
+    offer = ask(client, "mark Hanumanthaiah as family")
+    sid = offer["session_id"]
+    assert "You don't have a **Family** category" in offer["answer"]
+    assert "Transfers" in offer["answer"] and "yes" in offer["answer"]
+    assert client.get("/api/chat/memory").json()["memories"][0]["kind"] == "relationship"
+    done = ask(client, "yes, create it", sid)
+    assert "Created the **Family** category" in done["answer"] and "Done — moved" in done["answer"]
+    family = [c for c in client.get("/api/categories").json()["categories"] if c["label"] == "Family"]
+    assert family and family[0]["parent"] == "transfers"
+    cats = client.get("/api/transactions", params={"q": "hanumanthaiah", "page_size": 20}).json()["items"]
+    assert cats and {t["category"] for t in cats} == {family[0]["id"]}
+    # the relationship is remembered in a new conversation too
+    sent = ask(client, "how much did I send to family?")
+    assert "Hanumanth" in sent["answer"]
+
+
+def test_change_the_category_uses_the_payee_in_focus(client):
+    sid = ask(client, "how much have I paid rahul ratusari?")["session_id"]
+    offer = ask(client, "change the category to Gifts & Donations", sid)
+    assert "Shall I move" in offer["answer"] and "Rahul Ratusari" in offer["answer"]
+    assert "Gifts & Donations" in offer["answer"]
+    done = ask(client, "yes", sid)
+    assert "Done — moved" in done["answer"]
+    rows = client.get("/api/transactions", params={"q": "rahul ratusari", "page_size": 20}).json()["items"]
+    assert {t["category"] for t in rows} == {"gifts_donations"}
+
+
+def test_change_category_without_a_payee_in_focus_asks_which_one(client):
+    out = ask(client, "change the category to Rent")
+    assert "Which payee" in out["answer"]
+
+
+def test_list_follow_ups_reuse_the_previous_question(client):
+    first = ask(client, "how many transactions relate to rahul?")
+    sid = first["session_id"]
+    spec = first["trace"][0]["args"]["spec"]
+    assert spec["direction"] is None and not spec["missing_terms"]  # "relate" is not a payee name
+    assert "**12 Rahul transactions**" in first["answer"]  # Rahul Ratusari + the demo's Rahul Sharma
+    listed = ask(client, "list pleasse", sid)
+    assert listed["memory"]["kind"] == "ellipsis"
+    assert listed["trace"][0]["args"]["spec"]["measure"] == "list"
+    assert "Rahul Ratusari" in listed["answer"] and "Rahul Sharma" in listed["answer"]
+    credits = ask(client, "which ones were credits?", sid)
+    spec = credits["trace"][0]["args"]["spec"]
+    assert spec["direction"] == "credit" and spec["measure"] == "list"
+    assert "₹300" in credits["answer"]
+
+
+def test_money_movement_requests_still_hit_the_guardrails(client):
+    out = ask(client, "move 5000 to savings")
+    assert out["pipeline"] == ["guardrails"]
+
+
+# ---------------------------------------------------------------------------- embeddings
+def test_embedding_failures_open_a_circuit_breaker(monkeypatch):
+    from finpilot.config import Settings
+    from finpilot.llm.client import LLMError, LLMRouter
+
+    router = LLMRouter(
+        Settings(
+            llm_enabled=True,
+            embedding_model="nomic-embed-text",
+            embedding_provider="ollama",
+            llm_cache_enabled=False,
+        )
+    )
+    assert router.describe_embeddings() == "ollama:nomic-embed-text"
+    assert router.embeddings_available()
+
+    class Broken:
+        class embeddings:  # noqa: N801 - mimics the OpenAI client attribute
+            @staticmethod
+            def create(**_):
+                raise TimeoutError("slow endpoint")
+
+    monkeypatch.setattr(router, "_client", lambda spec: Broken())
+    with pytest.raises(LLMError):
+        router.embed(["coffee"])
+    assert not router.embeddings_available()  # chat skips dense retrieval for a while
+    router._embed_down_until = 0.0
+    assert router.embeddings_available()
+
+
+def test_embeddings_test_endpoint_explains_a_missing_model(client):
+    out = client.post("/api/settings/embeddings/test").json()
+    assert out["ok"] is False and "EMBEDDING_MODEL is not set" in out["error"]
+    state = client.get("/api/settings").json()
+    assert state["llm"]["embeddings"]["active"] is False
+
+
+def test_retriever_uses_the_global_router_for_dense_embeddings(client, monkeypatch):
+    from finpilot.db import session_scope
+    from finpilot.llm.client import get_router
+    from finpilot.services.retrieval import LedgerRetriever
+    from finpilot.services.toolkit import FinanceToolkit
+
+    router = get_router()
+    monkeypatch.setattr(router, "embeddings_available", lambda: True)
+    monkeypatch.setattr(
+        router,
+        "embed",
+        lambda texts, agent="retriever": [
+            [1.0, 0.0] if "Rapido" in t or "taxi" in t else [0.0, 1.0] for t in texts
+        ],
+    )
+    with session_scope() as s:
+        kit = FinanceToolkit(s, 1)
+        assert getattr(kit, "router", None) is None  # the production toolkit has no router attribute
+        hits = LedgerRetriever(kit).semantic_search("taxi", k=5)
+    assert hits[0]["retrieval"].startswith("hybrid")
+
+
+def test_questions_that_look_like_commands_are_not_recategorisations(client):
+    july = ask(client, "count my dining transactions in July")
+    assert "memory" not in july["pipeline"] and "transactions" in july["answer"]
+    assert "category" not in july["answer"].lower() or "Dining" in july["answer"]
+    possessive = ask(client, "mark Hanumanthaiah's payments as rent")
+    assert "Shall I move" in possessive["answer"] and "Rent & Housing" in possessive["answer"]

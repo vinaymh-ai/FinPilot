@@ -483,6 +483,60 @@ def correction_conventions(session: Session, user_id: int, limit: int = 20) -> l
     return out
 
 
+MAX_CUSTOM_CATEGORIES = 60
+
+
+class CategoryError(ValueError):
+    """A custom category request that cannot be honoured (status = the HTTP code to return)."""
+
+    def __init__(self, message: str, status: int = 422):
+        super().__init__(message)
+        self.status = status
+
+
+def create_custom_category(
+    session: Session,
+    user_id: int,
+    label_: str,
+    parent: str,
+    *,
+    color: str | None = None,
+    icon: str | None = None,
+    description: str | None = None,
+) -> str:
+    """Create one of the user's own categories; returns its id (``u<user>_<slug>``)."""
+    from finpilot.domain import taxonomy
+
+    taxonomy.load_custom(session, user_id)
+    if parent not in taxonomy.BUILTIN:
+        raise CategoryError("parent must be a built-in category")
+    label_ = " ".join(label_.split())[:60]
+    if not label_:
+        raise CategoryError("a category needs a name")
+    if any(c.label.lower() == label_.lower() for c in taxonomy.categories_for(user_id)):
+        raise CategoryError(f"a category called “{label_}” already exists", 409)
+    if len(taxonomy.custom_for(user_id)) >= MAX_CUSTOM_CATEGORIES:
+        raise CategoryError(f"at most {MAX_CUSTOM_CATEGORIES} custom categories")
+    base_id = f"u{user_id}_{taxonomy.slugify(label_)}"
+    cat_id, n = base_id, 2
+    while session.get(CustomCategory, cat_id) is not None:
+        cat_id, n = f"{base_id[:44]}_{n}", n + 1
+    session.add(
+        CustomCategory(
+            id=cat_id,
+            user_id=user_id,
+            label=label_,
+            parent=parent,
+            color=color,
+            icon=icon,
+            description=(description or "").strip() or None,
+        )
+    )
+    session.flush()
+    taxonomy.load_custom(session, user_id)
+    return cat_id
+
+
 def custom_categories(session: Session, user_id: int) -> list[Any]:
     from finpilot.domain import taxonomy
 

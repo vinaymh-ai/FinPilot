@@ -149,6 +149,8 @@ def meta(uid: int = Depends(current_user_id), db: Session = Depends(get_db)) -> 
         model = r.describe(agent) if agent in AGENTS and r.available(agent) else "rules"
         if c["id"] == "coordinator":
             model = "langgraph"
+        elif c["id"] == "retriever" and r.describe_embeddings():
+            model = f"hybrid + {r.describe_embeddings()}"
         elif c.get("model_label"):
             model = c["model_label"]
         cards.append(

@@ -516,6 +516,7 @@ export interface LLMState {
   providers: ProviderInfo[];
   agents: Record<string, { resolved: string; fallbacks: string[] }>;
   fallback_providers: string[];
+  embeddings?: { model: string | null; provider: string | null; target: string | null; active: boolean };
 }
 
 export interface SettingsView {

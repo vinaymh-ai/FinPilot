@@ -55,6 +55,12 @@ def _llm_state() -> dict[str, Any]:
         "providers": providers,
         "agents": agents,
         "fallback_providers": s.fallback_provider_list,
+        "embeddings": {
+            "model": s.embedding_model,
+            "provider": s.embedding_provider or None,
+            "target": r.describe_embeddings(),
+            "active": r.embeddings_available(),
+        },
     }
 
 
@@ -156,6 +162,32 @@ def test_llm(body: LLMTestRequest) -> dict[str, Any]:
         }
     except LLMError as exc:
         return {"ok": False, "provider": provider, "error": str(exc)[:400]}
+
+
+@router.post("/settings/embeddings/test", dependencies=[Depends(require_admin)])
+def test_embeddings() -> dict[str, Any]:
+    """Embed one sentence with the configured EMBEDDING_MODEL / EMBEDDING_PROVIDER."""
+    r = get_router()
+    target = r.describe_embeddings()
+    if target is None:
+        s = get_settings()
+        why = (
+            "EMBEDDING_MODEL is not set"
+            if not s.embedding_model
+            else f"provider '{s.embedding_provider or s.llm_provider}' is not configured (missing key / URL)"
+        )
+        return {"ok": False, "target": None, "error": f"{why} — chat uses local semantic retrieval only"}
+    t0 = time.perf_counter()
+    try:
+        (vec,) = r.embed(["coffee at a cafe"], agent="retriever")
+        return {
+            "ok": True,
+            "target": target,
+            "dimensions": len(vec),
+            "latency_ms": int((time.perf_counter() - t0) * 1000),
+        }
+    except LLMError as exc:
+        return {"ok": False, "target": target, "error": str(exc)[:400]}
 
 
 @router.get("/llm/models")

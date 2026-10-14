@@ -116,8 +116,11 @@ FAMILY = [
     "son",
     "daughter",
     "friend",
-    "best",
-    "friend",
+    "family",
+    "relative",
+    "relatives",
+    "parents",
+    "in-laws",
     "roommate",
     "flatmate",
     "cousin",
@@ -180,7 +183,7 @@ REMEMBER_RE = re.compile(
 )
 RELATION_RE = re.compile(
     rf"^\s*(?:(?:remember|note|fyi)(?:\s+that)?[,:]?\s+)?(?P<who>[a-z][a-z0-9 .'&-]{{1,60}}?)\s+(?:is|was|are|were)\s+"
-    rf"(?:my|our|the)\s+(?P<role>{_ROLE_RX})s?\b[.!]*\s*$",
+    rf"(?:(?:my|our|the|a|an)\s+)?(?P<role>{_ROLE_RX})s?\b[.!]*\s*$",
     re.IGNORECASE,
 )
 RELATION_REVERSED_RE = re.compile(
@@ -204,7 +207,8 @@ BOTH_RE = re.compile(
 )
 YES_RE = re.compile(
     r"^\s*(yes|yeah|yep|yup|ya|sure|ok(ay)?|confirm(ed)?|do it|go ahead|please do|yes please|proceed|correct|"
-    r"right|haan|ha)\b[\s!.]*(please|do it|go ahead)?[\s!.]*$",
+    r"right|haan|ha|absolutely|of course|please)\b[\s,!.]*((please|do it|go ahead|create it|move them|do that|"
+    r"that's right|thanks?|thank you)[\s,!.]*)*$",
     re.IGNORECASE,
 )
 NO_RE = re.compile(
@@ -218,11 +222,34 @@ ORDINALS = {
     "fourth": 3, "4th": 3, "4": 3,
 }  # fmt: skip
 CATEGORIZE_RE = re.compile(
-    r"^\s*(?:please\s+|can you\s+|could you\s+)?(?:re)?(?:categori[sz]e|classify|mark|tag|file|put|move|label|treat|"
-    r"count|record)\s+(?:all\s+)?(?:of\s+)?(?:my\s+)?(?:the\s+)?"
+    r"^\s*(?:please\s+|can you\s+|could you\s+|kindly\s+)?(?P<verb>(?:re)?(?:categori[sz]e|classify|mark|tag|file|"
+    r"put|move|label|treat|count|record|change|switch|set|make|update))\s+(?:all\s+)?(?:of\s+)?(?:my\s+)?(?:the\s+)?"
     r"(?:(?:payments?|transactions?|transfers?|debits?|credits?|spends?)\s+(?:to|from|with|of|for|at)\s+)?"
-    r"(?P<who>.+?)\s+(?:as|under|in|into|to)\s+(?:the\s+|my\s+)?(?P<cat>[a-z][a-z &'/-]{1,40}?)"
+    r"(?P<who>.+?)\s+(?P<prep>as|under|in|into|to)\s+(?:the\s+|my\s+)?(?P<cat>[a-z][a-z &'/-]{1,40}?)"
     r"(?:\s+category)?[.!?]*\s*$",
+    re.IGNORECASE,
+)
+# verbs that also start ordinary questions ("count my dining in July", "record …") recategorise only with as/under/to
+LOOSE_VERBS = {"count", "record", "set", "make", "update", "switch"}
+QUESTION_WORDS_RE = re.compile(r"\b(?:how much|how many|how often|total|average|sum of)\b", re.IGNORECASE)
+# "in July", "to last month": a period, never a category name
+PERIOD_RE = re.compile(
+    r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|"
+    r"oct(?:ober)?|nov(?:ember)?|dec(?:ember)?|today|yesterday|week|weekend|month|months|year|years|quarter|"
+    r"days?|morning|evening|night|weekdays?|total|all|last|this|next|past|previous|recent(?:ly)?)\b",
+    re.IGNORECASE,
+)
+# "change the category to Family", "set the category of Hanumanthaiah to Rent"
+CHANGE_CATEGORY_RE = re.compile(
+    r"^\s*(?:please\s+|can you\s+|could you\s+|kindly\s+)?(?:change|set|update|switch|make|move|put|correct|fix)\s+"
+    r"(?:the\s+|its\s+|their\s+|his\s+|her\s+|this\s+|that\s+)?(?:category|categories|label)\s*"
+    r"(?:(?:of|for)\s+(?P<who>.+?)\s+)?(?:to|as|into|in)\s+(?:the\s+|a\s+|my\s+)?"
+    r"(?P<cat>[a-z][a-z &'/-]{1,40}?)(?:\s+category)?[.!?]*\s*$",
+    re.IGNORECASE,
+)
+REFERENCE_WHO_RE = re.compile(
+    r"(?:them|those|these|it|that|this|him|her|they|the same(?: person| payee| one)?|same person|"
+    r"(?:that|this|the) (?:person|payee|merchant)|(?:his|her|their|those|these) (?:transactions?|payments?))",
     re.IGNORECASE,
 )
 REF_ENTITY_RE = re.compile(
@@ -237,7 +264,17 @@ REF_CATEGORY_RE = re.compile(
 )
 ELLIPSIS_RE = re.compile(
     r"^\s*(?:and|what about|how about|also|now|ok(?:ay)?,?\s+(?:and|what about|how about)|same for|but|only|just|"
-    r"what if only|then|for)\b",
+    r"what if only|then|for|which (?:ones?|of (?:them|those|these))|of (?:them|those|these)|"
+    r"among (?:them|those|these)|out of (?:them|those|these)|how many of (?:them|those|these)|"
+    r"(?:and )?(?:the|those|these) (?:ones|ones that))\b",
+    re.IGNORECASE,
+)
+# "list please", "show them", "which ones?", "details" — show the rows behind the previous answer
+LIST_FOLLOW_RE = re.compile(
+    r"\s*(?:(?:ok(?:ay)?|now|then|and|so|please|pls|plz|kindly|can you|could you)[\s,]+)*"
+    r"(?:list|show|display|give|see|view|itemi[sz]e|share|send|which ones|what are they|details?|breakdown)"
+    r"(?:\s+(?:me|them|those|these|it|all|all of them|the|transactions?|payments?|rows|list|details?|ones|please|pls|plz|"
+    r"\w*leas+e))*[\s?.!]*",
     re.IGNORECASE,
 )
 MEASURE_WORDS = re.compile(
@@ -630,7 +667,9 @@ class MemoryAgent(BaseAgent):
             who, role_word = m.group("who").strip(), m.group("role").lower().strip()
             role, implied = ROLES.get(role_word, (role_word, None))
             if re.fullmatch(
-                r"(he|she|they|him|her|this person|that person|the same person|same person)", who, re.I
+                r"(he|she|they|him|her|it|this|that|this person|that person|the same person|same person)",
+                who,
+                re.I,
             ):
                 payees = list((self.state.focus or {}).get("payees") or [])
             else:
@@ -652,7 +691,7 @@ class MemoryAgent(BaseAgent):
                 return self._handled(res, offer)
             if not payees:
                 text += f" (I couldn't find “{who}” among your payees yet; I'll match them when they appear.)"
-            return self._handled(res, self._reply(text, res=res))
+            return self._handled(res, self._reply(text, res=res, focus=payees or None))
         m = REMEMBER_RE.match(q)
         if m:
             what = m.group("what").strip()
@@ -678,22 +717,113 @@ class MemoryAgent(BaseAgent):
         return best.id if SequenceMatcher(None, t, best.label.lower()).ratio() >= 0.75 else None
 
     def _categorize_command(self, q: str, res: Resolution) -> Resolution | None:
-        m = CATEGORIZE_RE.match(q)
+        m = CHANGE_CATEGORY_RE.match(q) or CATEGORIZE_RE.match(q)
         if not m:
             return None
-        who, cat_text = m.group("who").strip(), m.group("cat").strip()
-        category = self._resolve_category(cat_text)
-        if category is None:
+        who = re.sub(
+            r"(?:'s|’s)?\s+(?:payments?|transactions?|transfers?|spends?|debits?|credits?)$",
+            "",
+            (m.group("who") or "").strip(),
+            flags=re.IGNORECASE,
+        )
+        cat_text = re.sub(r"^(?:the|a|an|my|our)\s+", "", m.group("cat").strip(), flags=re.IGNORECASE)
+        groups = m.groupdict()
+        verb = (groups.get("verb") or "").lower()
+        if verb in LOOSE_VERBS and (groups.get("prep") or "").lower() not in ("as", "under", "to", "into"):
             return None
-        if REF_ENTITY_RE.fullmatch(who) or re.fullmatch(r"(them|those|these|it|that|this)", who, re.I):
+        if PERIOD_RE.search(cat_text) or QUESTION_WORDS_RE.search(who):
+            return None  # "count my dining transactions in July", "update me how much I paid X in …"
+        if not who or REFERENCE_WHO_RE.fullmatch(who):
             payees = list((self.state.focus or {}).get("payees") or [])
+            if not payees:
+                return self._handled(
+                    res,
+                    self._reply(
+                        "Which payee should I recategorise? Say it like “mark Hanumanthaiah as Rent”.",
+                    ),
+                )
         else:
+            if re.search(r"\d", who):
+                return None  # "move 5000 to savings" is about money, not a payee's category
             payees = self._payees_for(who)
-        if not payees:
-            return self._handled(
-                res, self._reply(f"I couldn't find a payee matching “{who}” in your transactions.")
+            if not payees:
+                if self._resolve_category(cat_text) is None and not self._creatable(cat_text):
+                    return None  # not a categorisation request after all
+                return self._handled(
+                    res, self._reply(f"I couldn't find a payee matching “{who}” in your transactions.")
+                )
+        role = ROLES.get(cat_text.lower())
+        category = self._resolve_category(cat_text)
+        if role and role[1] == "transfers" and category in (None, "transfers"):
+            # "mark X as family": remember the relationship too (so "how much did I send to family?" works)
+            res.saved.append(
+                self._save(
+                    "relationship",
+                    role[0],
+                    f"{_person(payees)} is your {role[0]}",
+                    {
+                        "role": role[0],
+                        "payees": payees,
+                        "terms": [who or payees[0], *payees],
+                        "category": None,
+                    },
+                )
             )
+        if category is None:
+            if not self._creatable(cat_text):
+                return None
+            return self._handled(res, self._offer_new_category(payees, cat_text, res))
         return self._handled(res, self._offer_category(payees, category, None, res, force=True))
+
+    @staticmethod
+    def _creatable(text: str) -> bool:
+        """A short plain name the user can reasonably mean as a new category ("Family", "Pet care")."""
+        words = text.split()
+        return 1 <= len(words) <= 3 and all(re.fullmatch(r"[a-z][a-z&'/-]*", w, re.IGNORECASE) for w in words)
+
+    def _parent_for(self, text: str) -> str:
+        """The built-in category a new category named `text` should behave like."""
+        role = ROLES.get(text.lower())
+        if role and role[1]:
+            return role[1]
+        hits = [
+            c for c in self.retriever.match_categories(text) if c["score"] >= 0.85 and c["category"] in BY_ID
+        ]
+        base = hits[0]["category"] if hits else "other"
+        return BY_ID[base].parent or base if base in BY_ID else "other"
+
+    def _offer_new_category(self, payees: list[str], cat_text: str, res: Resolution) -> dict[str, Any]:
+        from finpilot.domain.normalize import payment_provider
+
+        name = " ".join(w if w.isupper() and len(w) > 1 else w.capitalize() for w in cat_text.split())
+        parent = self._parent_for(cat_text)
+        rows = [t for t in self.kit.rows if t.merchant in payees and not payment_provider(t.merchant)]
+        if not rows:
+            return self._reply(f"There are no transactions for {_names(payees)} yet.", focus=payees)
+        total = sum(abs(float(t.amount)) for t in rows)
+        prefix = (
+            f"Noted — **{_person(payees)}** is {cat_text.lower()}; I'll remember that.\n\n"
+            if res.saved
+            else ""
+        )
+        text = (
+            prefix + f"You don't have a **{name}** category yet. Shall I create it (it will count like "
+            f"**{label(parent)}**) and move **{len(rows)} transaction{'s' if len(rows) != 1 else ''}** with "
+            f"{_names(payees)} ({self.kit.money(total)}) into it? Future payments to them will go there too. "
+            "Reply **yes** to confirm or **no** to keep things as they are."
+        )
+        return self._reply(
+            text,
+            res=res,
+            focus=payees,
+            pending={
+                "kind": "confirm_recategorize",
+                "payees": payees,
+                "category": None,
+                "create": {"label": name, "parent": parent},
+                "count": len(rows),
+            },
+        )
 
     def _offer_category(
         self,
@@ -737,9 +867,10 @@ class MemoryAgent(BaseAgent):
                 prefix
                 + f"All {len(rows)} transactions with {_names(payees)} are already under **{label(category)}**.",
                 res=res,
+                focus=payees,
             )
         total = sum(abs(float(t.amount)) for t in to_move)
-        current = sorted({label(t.category) for t in to_move})
+        current = sorted({label(t.category or "other") for t in to_move})
         text = (
             prefix
             + f"Shall I move **{len(to_move)} transaction{'s' if len(to_move) != 1 else ''}** with {_names(payees)} "
@@ -749,6 +880,7 @@ class MemoryAgent(BaseAgent):
         return self._reply(
             text,
             res=res,
+            focus=payees,
             pending={
                 "kind": "confirm_recategorize",
                 "payees": payees,
@@ -762,6 +894,31 @@ class MemoryAgent(BaseAgent):
 
         category = pending.get("category")
         payees = [p for p in pending.get("payees") or [] if isinstance(p, str)]
+        created = None
+        create = pending.get("create") or {}
+        if not category and create.get("label"):
+            existing = next(
+                (
+                    c
+                    for c in categories_for(self.kit.user_id)
+                    if c.label.lower() == str(create["label"]).lower()
+                ),
+                None,
+            )
+            if existing is not None:
+                category = existing.id
+            else:
+                try:
+                    category = repo.create_custom_category(
+                        self.kit.session,
+                        self.kit.user_id,
+                        str(create["label"]),
+                        str(create.get("parent") or "other"),
+                        description=f"Created in chat for {_names(payees)}",
+                    )
+                    created = str(create["label"])
+                except repo.CategoryError as exc:
+                    return self._reply(f"I couldn't create that category: {exc}.")
         if not category or category not in BY_ID or not payees:
             return self._reply("That request has expired — please ask again.")
         moved, skipped = 0, []
@@ -776,13 +933,23 @@ class MemoryAgent(BaseAgent):
         for attr in ("rows", "txns"):
             self.kit.__dict__.pop(attr, None)
         text = (
-            f"Done — moved **{moved} transaction{'s' if moved != 1 else ''}** with {_names(payees)} to "
+            (
+                f"Created the **{created}** category (it counts like **{label(BY_ID[category].parent)}**). "
+                if created
+                else ""
+            )
+            + f"Done — moved **{moved} transaction{'s' if moved != 1 else ''}** with {_names(payees)} to "
             f"**{label(category)}**, and I'll file their future payments there too. Run the agents to refresh "
             "insights and the forecast with the new categories."
         )
         if skipped:
             text += f" ({_names(skipped)} is a payment app, so I left it for one-by-one review.)"
-        return self._reply(text, kind="recategorized", extra={"recategorized": moved})
+        return self._reply(
+            text,
+            kind="recategorized",
+            focus=payees,
+            extra={"recategorized": moved, "created_category": category if created else None},
+        )
 
     # ------------------------------------------------------------------ follow-ups
     def _follow_up(self, q: str, res: Resolution) -> Resolution:
@@ -793,7 +960,9 @@ class MemoryAgent(BaseAgent):
         spec = focus.get("spec")
         has_entity = self._mentions_entity(q)
         short = len(q.split()) <= 7
-        elliptical = bool(spec) and bool(ELLIPSIS_RE.match(q) or (short and not MEASURE_WORDS.search(q)))
+        elliptical = bool(spec) and bool(
+            ELLIPSIS_RE.match(q) or (short and not MEASURE_WORDS.search(q)) or LIST_FOLLOW_RE.fullmatch(q)
+        )
         if elliptical:
             res.base_spec = spec
         # 1. explicit references: "the same person", "him", "those payments"
@@ -857,6 +1026,7 @@ class MemoryAgent(BaseAgent):
         res: Resolution | None = None,
         pending: dict[str, Any] | None = None,
         extra: dict[str, Any] | None = None,
+        focus: list[str] | None = None,
     ) -> dict[str, Any]:
         out = {
             "answer": text,
@@ -864,7 +1034,12 @@ class MemoryAgent(BaseAgent):
             "model": "rules",
             "route": None,
             "pipeline": ["memory"],
-            "context": {"kind": kind, "pending": pending or ({"kind": "recap"} if kind == "recap" else None)},
+            "context": {
+                "kind": kind,
+                "pending": pending or ({"kind": "recap"} if kind == "recap" else None),
+                # the payees this reply was about, so "change it to …" / "how much did I pay them?" follow
+                "focus": {"payees": list(focus), "question": res.original if res else ""} if focus else None,
+            },
         }
         if extra:
             out.update(extra)
@@ -883,7 +1058,7 @@ class MemoryAgent(BaseAgent):
             ctx.setdefault("focus", None)
             return ctx
         focus: dict[str, Any] = {"question": res.question or res.original}
-        spec = _spec_from_trace(result.get("trace") or [])
+        spec = _spec_from_trace(result.get("trace") or []) or (result.get("analyst") or {}).get("spec")
         if spec:
             focus["spec"] = spec
             focus["payees"] = self._payees_of_spec(spec) or list(res.payees)

@@ -385,6 +385,14 @@ export default function SettingsPage() {
     },
     onError: (e: Error) => toast.error(e.message),
   });
+  const testEmbeddings = useMutation({
+    mutationFn: () => api.post<{ ok: boolean; target: string | null; dimensions?: number; latency_ms?: number; error?: string }>("/settings/embeddings/test"),
+    onSuccess: (r) => {
+      if (r.ok) toast.success(`Embeddings work: ${r.target} → ${r.dimensions} dimensions in ${r.latency_ms} ms`);
+      else toast.error("Embeddings unavailable", { description: r.error });
+      qc.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
   const test = useMutation({
     mutationFn: () => api.post<{ ok: boolean; reply?: string; model?: string; latency_ms?: number; error?: string }>("/settings/llm/test", { provider, model: model || null }),
     onSuccess: (r) => (r.ok ? toast.success(`Connected: ${r.model} replied “${r.reply}” in ${r.latency_ms} ms`) : toast.error("Connection failed", { description: r.error })),
@@ -457,6 +465,27 @@ export default function SettingsPage() {
               )}
             </button>
           ))}
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-5 py-4 text-[13px]">
+          <div className="min-w-0">
+            <div className="font-medium">Semantic search for chat</div>
+            <div className="text-muted">
+              {llm.embeddings?.target ? (
+                <>
+                  Local hybrid index + dense embeddings from <span className="font-mono text-ink">{llm.embeddings.target}</span>{" "}
+                  {llm.embeddings.active ? <Badge tone="green">active</Badge> : <Badge tone="amber">paused after an error — local index in use</Badge>}
+                </>
+              ) : (
+                <>
+                  Local hybrid index (spellings, meaning, merchant knowledge) — no API needed. Optional: set{" "}
+                  <span className="font-mono">EMBEDDING_MODEL</span> (and <span className="font-mono">EMBEDDING_PROVIDER</span>) in .env to add dense embeddings.
+                </>
+              )}
+            </div>
+          </div>
+          <Button size="sm" loading={testEmbeddings.isPending} onClick={() => testEmbeddings.mutate()}>
+            Test embeddings
+          </Button>
         </div>
         <div className="grid gap-3 border-t border-line p-5 md:grid-cols-[1fr_1fr_auto_auto] md:items-end">
           <div>

@@ -152,6 +152,27 @@ app container refers to that container. For a remote gateway or one on a shared 
 `DOCKER_FREELLMAPI_BASE_URL` to its reachable URL instead. After changing `.env`, run
 `docker compose up -d` to recreate the app with the new environment, then use **Settings → Test connection**.
 
+### Semantic search for chat (optional embeddings)
+
+Chat links your words to payees and categories with a **local hybrid index** that needs no API: Indian-name
+spelling variants ("hanumantha" → Hanumanthaiah *and* Hanumanthiah), TF-IDF vectors over words and character
+n-grams, and *meaning* features (category vocabulary plus what each brand or local business is — "coffee" →
+Starbucks, "cab rides" → Uber/Ola/Rapido). An embedding model adds dense vectors on top, fused by Reciprocal
+Rank Fusion. FreeLLMAPI serves chat only, so point embeddings at a provider with `/embeddings`:
+
+```dotenv
+# free and local (run `ollama pull nomic-embed-text` first)
+EMBEDDING_PROVIDER=ollama
+EMBEDDING_MODEL=nomic-embed-text
+# …or Google's free tier:  EMBEDDING_PROVIDER=gemini  EMBEDDING_MODEL=text-embedding-004  GEMINI_API_KEY=…
+# …or OpenAI:              EMBEDDING_PROVIDER=openai  EMBEDDING_MODEL=text-embedding-3-small  OPENAI_API_KEY=…
+```
+
+Leave `EMBEDDING_PROVIDER` blank to reuse `LLM_PROVIDER`. Compose reaches Ollama on your machine through
+`http://host.docker.internal:11434/v1` (`DOCKER_OLLAMA_BASE_URL`). Check the setup with **Settings → Test
+embeddings**. If the endpoint fails or takes longer than `EMBEDDING_TIMEOUT_S` (8 s), chat skips dense retrieval
+for five minutes and answers from the local index, so a dead endpoint never slows the chat down.
+
 Jev decisions use a separate API. For a direct TypeSafe connection, set `JEV_PROVIDER=typesafe`,
 `TYPESAFE_API_KEY` and `JEV_MODEL=jev-1.13.0`. The shorter `jev-1.13` id is rejected by TypeSafe; the client now
 translates Mesh's default alias for direct calls. This optional legacy route is off by default;
@@ -229,7 +250,7 @@ graph LR
 
 | Agent | Job | How it stays accurate |
 |---|---|---|
-| **Memory** | Working memory of each conversation (what the last answer was about, open questions) and long-term memory of what you taught it ("Hanumanthaiah is my landlord", "these two spellings are one person", "call me Vinay") | Resolves references ("the same person", "her", "those payments"), ellipsis ("and in August?", "what about Ola?" — the previous structured query with one aspect swapped), replies to clarifications ("both", "the first one"), recaps; deterministic, so follow-ups are reproducible. Facts are only saved from explicit statements, never from prompt-injection text, and can be listed/deleted in chat or **Settings → Memory** |
+| **Memory** | Working memory of each conversation (what the last answer was about, open questions) and long-term memory of what you taught it ("Hanumanthaiah is my landlord", "these two spellings are one person", "call me Vinay") | Resolves references ("the same person", "her", "those payments"), ellipsis ("and in August?", "what about Ola?" — the previous structured query with one aspect swapped), replies to clarifications ("both", "the first one"), list follow-ups ("list please", "which ones were credits?"), recategorisation in chat ("mark X as family", "change the category to Rent" — after a **yes**, creating the category if it is new), recaps; deterministic, so follow-ups are reproducible. Facts are only saved from explicit statements, never from prompt-injection text, and can be listed/deleted in chat or **Settings → Memory** |
 | **Guardrails** | Refuse money-moving actions, prompt injection, off-topic chat | Runs before any model sees the message |
 | **Retriever (RAG)** | Link words to *your* payees and categories — by spelling ("swigy" → Swiggy; "hanumantha" → Hanumanthaiah **and** Hanumanthiah, recognised as one payee), by meaning ("coffee" → Starbucks, "cab rides" → Uber/Ola/Rapido, "pizza" → Domino's, "petrol" → Shell + Sri Durga Fuels) and by memory ("my landlord"); pull relevant insights, recommendations and goals | **Hybrid semantic search**: TF-IDF sparse vectors over words, character n-grams and *meaning* (category vocabulary + merchant enrichment: what each brand or local business *is*), BM25 over narrations, an Indian-name consonant skeleton for spelling variants, plus **optional dense embeddings** (`EMBEDDING_MODEL`, any OpenAI-compatible `/embeddings`) fused by Reciprocal Rank Fusion. Works offline and reproducibly without the embedding API |
 | **SQL Analyst** | Any factual question: counts, lists, averages, max/min/first/last, breakdowns by month/category/merchant/weekday/channel, credits & income, period comparisons, weekend/late-night, amount thresholds | Runs in a **per-request in-memory SQLite that contains only your rows** (authorizer allows SELECT only, no PRAGMA/ATTACH, CPU/size limits). A deterministic parser compiles fully understood questions; anything else goes to LLM text-to-SQL with schema, date anchors and retrieved values, repaired from the database error up to twice. Unknown payees give "no matches", never a grand total |
@@ -249,6 +270,8 @@ keeps its working memory across reloads (it is stored with each answer), so this
 > **You:** Hanumanthaiah is my landlord → saved; *“Shall I move 8 transactions (₹27,000, now under Transfers) to Rent & Housing?”* → **yes** → done, logged, and future imports follow
 > **You** (new chat, next week): how much did I pay my landlord this year? → answered from long-term memory
 > **You:** summarise our chat → a recap of every question with its key figure
+> **You:** mark Hanumanthaiah as family → *“You don't have a Family category yet. Shall I create it (it counts like Transfers) and move 10 transactions into it?”* → **yes** → created, moved, remembered
+> **You:** how many transactions relate to rahul? → **list please** → **which ones were credits?** → each answer reuses the previous question, so short follow-ups never need re-explaining
 
 ---
 

@@ -19,7 +19,6 @@ from finpilot.schemas import BulkCategorize, CategoryCreate, CategoryUpdate, Rul
 from finpilot.services import repository as repo
 
 router = APIRouter()
-MAX_CUSTOM = 60
 MAX_RULES = 300
 
 
@@ -114,31 +113,18 @@ def list_categories(uid: int = Depends(current_user_id), db: Session = Depends(g
 def create_category(
     body: CategoryCreate, uid: int = Depends(current_user_id), db: Session = Depends(get_db)
 ) -> dict[str, Any]:
-    repo.custom_categories(db, uid)
-    if body.parent not in taxonomy.BUILTIN:
-        raise HTTPException(422, "parent must be a built-in category")
-    label_ = " ".join(body.label.split())
-    existing = taxonomy.categories_for(uid)
-    if any(c.label.lower() == label_.lower() for c in existing):
-        raise HTTPException(409, f"a category called “{label_}” already exists")
-    if len(taxonomy.custom_for(uid)) >= MAX_CUSTOM:
-        raise HTTPException(422, f"at most {MAX_CUSTOM} custom categories")
-    base_id = f"u{uid}_{taxonomy.slugify(label_)}"
-    cat_id, n = base_id, 2
-    while db.get(CustomCategory, cat_id) is not None:
-        cat_id, n = f"{base_id[:44]}_{n}", n + 1
-    row = CustomCategory(
-        id=cat_id,
-        user_id=uid,
-        label=label_,
-        parent=body.parent,
-        color=body.color,
-        icon=body.icon,
-        description=(body.description or "").strip() or None,
-    )
-    db.add(row)
-    db.flush()
-    repo.custom_categories(db, uid)
+    try:
+        cat_id = repo.create_custom_category(
+            db,
+            uid,
+            body.label,
+            body.parent,
+            color=body.color,
+            icon=body.icon,
+            description=body.description,
+        )
+    except repo.CategoryError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
     rule_out, applied = None, 0
     terms = [t.strip() for t in body.keywords if t and t.strip()]
     if terms:
