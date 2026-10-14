@@ -314,10 +314,13 @@ export default function Transactions() {
 
   const bulk = useMutation({
     mutationFn: (body: { ids: number[]; category?: string; approve?: boolean; remember?: boolean }) =>
-      api.post<{ updated: number; changed: number; learned_merchants: number }>("/transactions/bulk", body),
+      api.post<{ updated: number; changed: number; learned_merchants: number; not_learned?: string[] }>("/transactions/bulk", body),
     onSuccess: (r, v) => {
+      const skipped = r.not_learned?.length
+        ? ` Not remembered (your selected rows had different categories): ${r.not_learned.join(", ")}.`
+        : "";
       toast.success(v.approve ? `Approved ${r.updated} transaction(s)` : `Moved ${r.updated} transaction(s)`, {
-        description: r.learned_merchants ? `Learned ${r.learned_merchants} merchant(s) for future imports.` : "Logged in each transaction's history.",
+        description: (r.learned_merchants ? `Learned ${r.learned_merchants} merchant(s) for future imports.` : "Logged in each transaction's history.") + skipped,
       });
       setSelected(new Set());
       qc.invalidateQueries({ queryKey: ["transactions"] });

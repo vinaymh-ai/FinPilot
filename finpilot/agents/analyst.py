@@ -473,6 +473,7 @@ def parse_question(
         for _, _, lab in compare:
             explained |= set(normalize_text(lab).split())
     # ---- direction / scope -----------------------------------------------------------------------
+    both_directions = False
     if re.search(r"\b(income|salary|salaries|earned|earn|earnings|paycheck)\b", q):
         spec.income_only, spec.direction = True, "credit"
     elif re.search(
@@ -481,7 +482,7 @@ def parse_question(
         r"\b(debits?|paid|sent|spent|money out|outflows?)\b|\bin and out\b|\bboth (ways|directions)\b",
         q,
     ):
-        spec.direction = None  # "debits and credits": both directions, reported separately
+        spec.direction, both_directions = None, True  # "debits and credits": both, reported separately
         explained |= {"DEBIT", "DEBITS", "CREDIT", "CREDITS", "AND", "BOTH", "WAYS", "IN", "OUT"}
     elif re.search(
         r"\b(received|receive|credited|credits?|deposits?|money in|inflows?|refunds?|cashbacks?|got paid)\b",
@@ -497,7 +498,7 @@ def parse_question(
         spec.direction = "debit"
     if re.search(r"\brefunds?\b|\bcashbacks?\b", q):
         spec.spending_only = True
-    if spec.direction is None and base is not None:
+    if spec.direction is None and base is not None and not both_directions:
         spec.direction, spec.spending_only, spec.income_only = (
             base.direction,
             base.spending_only,
@@ -505,9 +506,14 @@ def parse_question(
         )
         if base.direction:
             inherited.append("direction")
-    if spec.measure in ("max", "min") and spec.direction is None and not group_by:
+    if spec.measure in ("max", "min") and spec.direction is None and not group_by and not both_directions:
         spec.direction = "debit" if not re.search(r"\btransactions?\b", q) else None
-    if group_by and spec.direction is None and spec.measure not in ("count", "frequency", "list"):
+    if (
+        group_by
+        and spec.direction is None
+        and not both_directions
+        and spec.measure not in ("count", "frequency", "list")
+    ):
         # "monthly breakdown", "top categories": amounts per group are spending unless stated otherwise
         spec.direction, spec.spending_only = "debit", True
 

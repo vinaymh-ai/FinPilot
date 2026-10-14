@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -173,9 +174,9 @@ def update_category(
             raise HTTPException(409, f"a category called “{label_}” already exists")
         row.label = label_
     for attr in ("color", "icon", "description"):
-        value = getattr(body, attr)
-        if value is not None:
-            setattr(row, attr, value or None)
+        if attr in body.model_fields_set:  # an explicit null clears the field; an omitted one is kept
+            value = getattr(body, attr)
+            setattr(row, attr, value.strip() or None if isinstance(value, str) else None)
     db.commit()
     repo.custom_categories(db, uid)
     return {"category": _category_dict(taxonomy.BY_ID[cat_id], {})}
@@ -355,7 +356,7 @@ def bulk_categorize(
     if not rows:
         raise HTTPException(404, "no matching transactions")
     changed, learned = 0, 0
-    merchants: dict[str, str] = {}
+    merchants: dict[str, set[str]] = defaultdict(set)
     for t in rows:
         category = body.category or t.category or "other"
         reason = "Confirmed by you" if body.category is None else "Recategorised by you (bulk)"
@@ -369,16 +370,29 @@ def bulk_categorize(
             actor="review" if body.approve else "user",
         ):
             changed += 1
-        if body.remember and category != "other" and not payment_provider(t.description):
-            merchants[t.merchant] = category
-    for merchant, category in merchants.items():
+        if body.remember and not payment_provider(t.description):
+            merchants[t.merchant].add(category)
+    conflicts: list[str] = []
+    for merchant, cats in merchants.items():
+        if len(cats) != 1:
+            # The selected rows disagree; learning either category would overwrite the others.
+            conflicts.append(merchant)
+            continue
+        (category,) = cats
+        if category == "other":
+            continue
         try:
             repo.remember_correction(db, uid, merchant, category)
             learned += 1
         except ValueError:
             continue
     db.commit()
-    return {"updated": len(rows), "changed": changed, "learned_merchants": learned}
+    return {
+        "updated": len(rows),
+        "changed": changed,
+        "learned_merchants": learned,
+        "not_learned": sorted(conflicts),
+    }
 
 
 @router.get("/transactions/{txn_id}/history")

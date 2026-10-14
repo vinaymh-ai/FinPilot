@@ -330,3 +330,47 @@ def test_dense_embeddings_are_fused_when_configured(client, monkeypatch):
         kit.router = router
         hits = LedgerRetriever(kit).semantic_search("taxi", k=5)
     assert hits[0]["retrieval"].startswith("hybrid") and "Rapido" in [h["merchant"] for h in hits]
+
+
+# ---------------------------------------------------------------------------- review fixes (PR #5)
+def test_bulk_remember_skips_a_merchant_whose_selected_rows_disagree(client):
+    rows = client.get("/api/transactions", params={"q": "hanumanthaiah", "page_size": 20}).json()["items"]
+    assert len(rows) == 5
+    a, b, others = rows[0]["id"], rows[1]["id"], [t["id"] for t in rows[2:]]
+    client.patch(f"/api/transactions/{a}", json={"category": "rent", "apply_to_merchant": False})
+    client.patch(f"/api/transactions/{b}", json={"category": "gifts_donations", "apply_to_merchant": False})
+    out = client.post(
+        "/api/transactions/bulk", json={"ids": [a, b], "approve": True, "remember": True}
+    ).json()
+    assert out["learned_merchants"] == 0 and out["not_learned"] == ["Hanumanthaiah"]
+    cats = {
+        t["id"]: t["category"]
+        for t in client.get("/api/transactions", params={"q": "hanumanthaiah", "page_size": 20}).json()[
+            "items"
+        ]
+    }
+    assert cats[a] == "rent" and cats[b] == "gifts_donations"  # both approvals kept
+    assert all(cats[i] == "transfers" for i in others)  # unselected rows untouched
+    # when the selection agrees, the merchant is learned and its other rows follow
+    out = client.post(
+        "/api/transactions/bulk", json={"ids": [a, b], "category": "rent", "remember": True}
+    ).json()
+    assert out["learned_merchants"] == 1 and out["not_learned"] == []
+    cats = client.get("/api/transactions", params={"q": "hanumanthaiah", "page_size": 20}).json()["items"]
+    assert {t["category"] for t in cats} == {"rent"}
+
+
+def test_explicit_both_directions_survive_an_elliptical_follow_up(client):
+    sid = ask(client, "how much did I pay hanumanthaiah?")["session_id"]  # a debit-only question
+    both = ask(client, "and how many debits and credits?", sid)
+    assert both["memory"]["kind"] == "ellipsis"
+    assert both["trace"][0]["args"]["spec"]["direction"] is None
+    assert "7 debits" in both["answer"] and "1 credit" in both["answer"]
+
+
+def test_custom_category_description_can_be_cleared_but_is_kept_when_omitted(client):
+    client.post("/api/categories", json={"label": "Pets", "parent": "shopping", "description": "Vet bills"})
+    kept = client.patch("/api/categories/u1_pets", json={"label": "Pets"}).json()["category"]
+    assert kept["description"] == "Vet bills"
+    cleared = client.patch("/api/categories/u1_pets", json={"description": None}).json()["category"]
+    assert cleared["description"].startswith("Your category")  # back to the default text

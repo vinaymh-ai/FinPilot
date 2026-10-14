@@ -561,7 +561,7 @@ finpilot/
   api/          FastAPI routers + serializers        main.py · models.py · config.py · db.py
 evaluation/     run_eval.py · jev_eval.py + jev_cases.py (labelled sets) · results/ (REPORT.md, latest.json)
 frontend/       React 19 + Vite + TypeScript + Tailwind 4 + Recharts + TanStack Query
-tests/          287 tests: domain logic, agents (fake LLM + simulated /v1/evaluate), Jev, statement formats, accounts
+tests/          290 tests: domain logic, agents (fake LLM + simulated /v1/evaluate), Jev, statement formats, accounts
                 & isolation, observability, API
 ```
 
