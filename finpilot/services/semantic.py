@@ -132,7 +132,7 @@ class SparseIndex:
         self.vecs = [self._weigh(d) for d in docs]
 
     def _weigh(self, feats: Counter[str]) -> dict[str, float]:
-        v = {f: (1 + math.log(x)) * self.idf.get(f, 0.0) for f, x in feats.items() if x > 0}
+        v = {f: math.log1p(x) * self.idf.get(f, 0.0) for f, x in feats.items() if x > 0}
         norm = math.sqrt(sum(w * w for w in v.values())) or 1.0
         return {f: w / norm for f, w in v.items() if w}
 

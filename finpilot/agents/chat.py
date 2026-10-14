@@ -38,7 +38,7 @@ from finpilot.decisions.policy import log_decisions, order_debias, record, top_p
 from finpilot.decisions.spec import chat_questions, chat_state
 from finpilot.domain.normalize import normalize_text
 from finpilot.domain.stats import add_months
-from finpilot.domain.taxonomy import DISCRETIONARY
+from finpilot.domain.taxonomy import CATEGORY_IDS, DISCRETIONARY
 from finpilot.llm.client import LLMError
 from finpilot.llm.grounding import check_grounding
 from finpilot.observability.tracing import traceable
@@ -1830,7 +1830,8 @@ def analyst_owns(spec: Any) -> bool:
     ):
         return False  # payee lookups keep the search tool's abbreviated-name suggestions
     if (
-        getattr(spec, "payee_source", None) in ("memory", "variants", "semantic")
+        any(c not in CATEGORY_IDS for c in spec.categories)  # the user's own categories
+        or getattr(spec, "payee_source", None) in ("memory", "variants", "semantic")
         or getattr(spec, "inherited", None)
         or getattr(spec, "implicit_measure", False)
     ):

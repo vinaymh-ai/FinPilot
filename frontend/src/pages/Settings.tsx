@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Check, Database, KeyRound, Lock, LogOut, Plug, Scale, ShieldCheck, Trash2, User, Zap } from "lucide-react";
+import { Bot, Brain, Check, Database, KeyRound, Lock, LogOut, Plug, Scale, ShieldCheck, Trash2, User, Zap } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -8,7 +8,7 @@ import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { cn, money } from "../lib/format";
 import { useRefreshAll } from "../lib/hooks";
-import type { JevState, LLMState, SettingsView } from "../lib/types";
+import type { JevState, LLMState, SettingsView, UserMemory } from "../lib/types";
 
 const AGENTS = ["categorizer", "analyzer", "forecaster", "advisor", "chat", "digest"];
 
@@ -256,6 +256,63 @@ function AccountCard() {
             </form>
           )}
         </div>
+      </div>
+    </Card>
+  );
+}
+
+function MemoryCard() {
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery({ queryKey: ["memories"], queryFn: () => api.get<{ memories: UserMemory[] }>("/chat/memory") });
+  useEffect(() => {
+    if (window.location.hash === "#memory") document.getElementById("memory")?.scrollIntoView({ behavior: "smooth" });
+  }, [data]);
+  const remove = useMutation({
+    mutationFn: (id: number | "all") => api.del(id === "all" ? "/chat/memory" : `/chat/memory/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["memories"] }),
+  });
+  const items = data?.memories ?? [];
+  return (
+    <Card id="memory">
+      <CardHeader
+        title="Memory"
+        icon={<Brain className="size-4" />}
+        subtitle="What Ask FinPilot remembers about you across conversations. Teach it in chat: “Hanumanthaiah is my landlord”, “remember that…”."
+        action={
+          items.length > 0 && (
+            <Button size="sm" variant="ghost" onClick={() => window.confirm("Forget everything FinPilot remembers about you?") && remove.mutate("all")}>
+              Forget all
+            </Button>
+          )
+        }
+      />
+      <div className="p-5 pt-3">
+        {isLoading ? (
+          <Skeleton className="h-16" />
+        ) : !items.length ? (
+          <p className="text-[13px] text-muted">Nothing saved yet. Facts you tell the chat about your payees, relationships and preferences appear here.</p>
+        ) : (
+          <ul className="divide-y divide-line rounded-xl border border-line">
+            {items.map((m) => (
+              <li key={m.id} className="flex items-center justify-between gap-3 px-3 py-2 text-[13px]">
+                <div className="min-w-0">
+                  <div>{m.content}</div>
+                  <div className="mt-0.5 flex flex-wrap gap-1 text-[11px] text-muted">
+                    <Badge>{m.kind}</Badge>
+                    {m.payees.map((p) => (
+                      <Badge key={p} tone="violet">
+                        {p}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+                <button onClick={() => remove.mutate(m.id)} className="rounded p-1 text-muted hover:bg-surface-2 hover:text-red-500" aria-label="Forget">
+                  <Trash2 className="size-3.5" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </Card>
   );
@@ -517,6 +574,7 @@ export default function SettingsPage() {
           </div>
         </Card>
         <div className="space-y-6">
+          <MemoryCard />
           <Card>
             <CardHeader title="Demo data" icon={<Database className="size-4" />} subtitle="Replace everything with a synthetic 8-month statement and re-run all agents." />
             <div className="flex flex-col gap-3 p-5 sm:flex-row">

@@ -182,8 +182,8 @@ class QuerySpec:
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> QuerySpec:
         """Rebuild a spec stored in chat memory (dates come back as ISO strings)."""
-        known = {f for f in cls.__dataclass_fields__}
-        data = {k: v for k, v in d.items() if k in known}
+        known = set(cls.__dataclass_fields__)
+        data = {k: v for k, v in d.items() if k in known and v is not None or k in ("start", "end")}
         for key in ("start", "end"):
             if data.get(key):
                 data[key] = dt.date.fromisoformat(str(data[key]))

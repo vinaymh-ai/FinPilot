@@ -504,6 +504,12 @@ def eval_narrations() -> dict[str, Any]:
     }
 
 
+def chat_eval_first_run() -> dict[str, Any]:
+    from evaluation import chat_eval
+
+    return chat_eval.CONVERSATIONS_FIRST_RUN
+
+
 def eval_chat_qa() -> dict[str, Any]:
     from evaluation import chat_eval
 
@@ -666,6 +672,27 @@ def render_markdown(r: dict[str, Any]) -> str:
             lines += [
                 "Misses come from categorisation, not the chat: e.g. long-tail shops (Chumbak, Fabindia) stay "
                 "uncategorised without the LLM stage, so a 'shopping' list is short by those rows.",
+                "",
+            ]
+        conv = qa.get("conversations")
+        if conv:
+            first = chat_eval_first_run()
+            lines += [
+                "### Conversation memory (multi-turn)",
+                "",
+                f"**{conv['accuracy'] * 100:.0f}%** of {conv['turns']} turns correct; follow-up turns (which only "
+                f"make sense with memory — “and in August?”, “how many times did I pay her?”, “what about Ola?”) "
+                f"**{conv['follow_up_accuracy'] * 100:.0f}%**. First run of this set, before fixing what it exposed: "
+                f"{first['accuracy'] * 100:.0f}% overall, {first['follow_up_accuracy'] * 100:.0f}% on follow-ups "
+                f"({first['note']}).",
+                "",
+                "| Turn | Question | Memory | Expected | Answer | ✓ |",
+                "|---|---|---|---|---|---|",
+                *[
+                    f"| {x['turn']} | {x['question']} | {x['memory']} | {x['expected']} | {x['got']} | "
+                    f"{'✅' if x['ok'] else '❌'} |"
+                    for x in conv["results"]
+                ],
                 "",
             ]
     if r.get("jev"):

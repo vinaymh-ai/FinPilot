@@ -131,6 +131,7 @@ def health(db: Session = Depends(get_db)) -> dict[str, Any]:
 @router.get("/meta")
 def meta(uid: int = Depends(current_user_id), db: Session = Depends(get_db)) -> dict[str, Any]:
     user = repo.get_or_create_user(db, uid)
+    repo.custom_categories(db, uid)
     r = get_router()
     cards = []
     for c in AGENT_CARDS:
@@ -147,7 +148,7 @@ def meta(uid: int = Depends(current_user_id), db: Session = Depends(get_db)) -> 
         "version": __version__,
         "currency": user.currency,
         "user": {"id": user.id, "name": user.name},
-        "categories": as_dicts(),
+        "categories": as_dicts(uid),
         "agents": cards,
         "llm_enabled": r.enabled,
         "decisions": get_jev().describe(),

@@ -7,6 +7,73 @@ export interface Category {
   color: string;
   icon: string;
   description: string;
+  parent?: string | null;
+  parent_label?: string | null;
+  custom?: boolean;
+  transactions?: number;
+  spent?: number;
+}
+
+export interface CategoryRule {
+  id: number;
+  category: string;
+  category_label: string;
+  terms: string[];
+  field: "any" | "merchant" | "description";
+  match: "contains" | "word" | "equals" | "starts_with";
+  direction: "debit" | "credit" | null;
+  min_amount: number | null;
+  max_amount: number | null;
+  channel: string | null;
+  priority: number;
+  enabled: boolean;
+  source: string | null;
+  hits: number;
+  description: string;
+  created_at: string | null;
+}
+
+export interface CategoryEvent {
+  id: number;
+  at: string | null;
+  actor: string;
+  from: string | null;
+  from_label: string | null;
+  to: string | null;
+  to_label: string;
+  source: string | null;
+  confidence: number | null;
+  reason: string | null;
+  run_id: number | null;
+}
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  title_source: string | null;
+  pinned: boolean;
+  message_count: number;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ChatMemoryInfo {
+  kind: string;
+  standalone_question?: string | null;
+  payees?: string[];
+  inherited_from?: string | null;
+  notes?: string[];
+  saved?: { id: number; kind: string; subject: string; content: string }[];
+}
+
+export interface UserMemory {
+  id: number;
+  kind: string;
+  subject: string;
+  content: string;
+  payees: string[];
+  category: string | null;
+  created_at: string | null;
 }
 
 export interface AgentCard {
@@ -343,6 +410,7 @@ export interface ChatMessage {
   artifacts?: ChatArtifact[];
   pipeline?: string[];
   guard?: { checked: boolean; ok: boolean; label: string } | null;
+  memory?: ChatMemoryInfo | null;
   pending?: boolean;
 }
 

@@ -132,6 +132,56 @@ BRAND_TAGS: dict[str, str] = {
 }
 
 
+# Kinds of local business, read from words in an unknown merchant's own name
+# ("SRI DURGA FUELS", "SHRI GANESH MEDICALS", "IYENGAR BAKERY").
+KIND_TAGS: dict[str, str] = {
+    "MEDICAL": "pharmacy medicines medical chemist drugs",
+    "MEDICALS": "pharmacy medicines medical chemist drugs",
+    "PHARMACY": "pharmacy medicines medical chemist drugs",
+    "PHARMA": "pharmacy medicines medical chemist drugs",
+    "CHEMIST": "pharmacy medicines medical chemist drugs",
+    "CHEMISTS": "pharmacy medicines medical chemist drugs",
+    "DRUGS": "pharmacy medicines medical chemist drugs",
+    "FUEL": "petrol diesel fuel pump car bike",
+    "FUELS": "petrol diesel fuel pump car bike",
+    "PETROL": "petrol diesel fuel pump car bike",
+    "PETROLEUM": "petrol diesel fuel pump car bike",
+    "FILLING": "petrol diesel fuel pump car bike",
+    "BAKERY": "bakery cakes bread snacks",
+    "BAKERS": "bakery cakes bread snacks",
+    "CAKES": "bakery cakes bread snacks",
+    "SWEETS": "sweets snacks dessert",
+    "CAFE": "coffee tea cafe",
+    "COFFEE": "coffee cafe",
+    "RESTAURANT": "restaurant meal dinner lunch eating out",
+    "DHABA": "restaurant meal dinner lunch eating out",
+    "BIRYANI": "restaurant biryani meal eating out",
+    "SALON": "salon haircut grooming beauty",
+    "PARLOUR": "salon beauty grooming",
+    "HOSPITAL": "hospital clinic doctor consultation",
+    "CLINIC": "hospital clinic doctor consultation",
+    "DIAGNOSTICS": "lab tests blood test diagnostics",
+    "DENTAL": "dentist clinic doctor",
+    "GYM": "gym fitness workout",
+    "FITNESS": "gym fitness workout",
+    "OPTICALS": "glasses spectacles eyewear",
+    "MOBILES": "phone mobile electronics",
+    "ELECTRONICS": "electronics phone laptop gadgets appliances",
+    "TRAVELS": "travel trip tickets tour",
+    "TOURS": "travel trip tour holiday",
+    "BOOKS": "books bookstore stationery",
+    "STATIONERY": "stationery books school",
+    "TAILORS": "tailor clothes stitching",
+    "LAUNDRY": "laundry dry cleaning clothes",
+    "SUPERMARKET": "supermarket groceries household",
+    "KIRANA": "groceries kirana provisions",
+    "PROVISIONS": "groceries provisions",
+    "VEGETABLES": "vegetables groceries fresh",
+    "DAIRY": "milk dairy",
+    "MILK": "milk dairy",
+}
+
+
 def rule_category(rule_name: str) -> str | None:
     from finpilot.domain.lexicon import MERCHANT_RULES
 
@@ -154,6 +204,7 @@ def word_forms(word: str) -> set[str]:
 def describe(merchant: str, description: str = "") -> str:
     """Descriptor words for a merchant ('' when it is not a known brand or kind of business)."""
     rule = match_merchant(normalize_text(f"{merchant} {description}"))
-    if rule is None:
-        return ""
-    return BRAND_TAGS.get(rule.name, "")
+    if rule is not None and rule.name in BRAND_TAGS:
+        return BRAND_TAGS[rule.name]
+    kinds = [KIND_TAGS[w] for w in normalize_text(merchant).split() if w in KIND_TAGS]
+    return " ".join(dict.fromkeys(kinds))

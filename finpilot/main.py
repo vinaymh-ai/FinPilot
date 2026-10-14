@@ -14,7 +14,17 @@ from fastapi.staticfiles import StaticFiles
 
 from finpilot import __version__
 from finpilot.api.deps import current_principal, require_token
-from finpilot.api.routes import agents, auth, core, decisions, observability, planning, settings, transactions
+from finpilot.api.routes import (
+    agents,
+    auth,
+    categories,
+    core,
+    decisions,
+    observability,
+    planning,
+    settings,
+    transactions,
+)
 from finpilot.config import get_settings
 from finpilot.db import init_db, session_scope
 from finpilot.decisions.jev import get_jev
@@ -131,6 +141,7 @@ def create_app() -> FastAPI:
         (observability.router, "observability"),
         (core.router, "system"),
         (transactions.router, "transactions"),
+        (categories.router, "categories"),
         (planning.router, "planning"),
         (agents.router, "agents"),
         (decisions.router, "decisions"),

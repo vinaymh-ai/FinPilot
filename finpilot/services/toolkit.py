@@ -23,7 +23,7 @@ from finpilot.domain.money import format_money
 from finpilot.domain.normalize import merchant_matches, normalize_text
 from finpilot.domain.recurring import monthly_equivalent
 from finpilot.domain.stats import add_months, month_key
-from finpilot.domain.taxonomy import BY_ID, CATEGORIES, NON_SPEND, is_spending_flow, label
+from finpilot.domain.taxonomy import BY_ID, CATEGORIES, NON_SPEND, custom_for, is_spending_flow, label
 from finpilot.services import repository as repo
 
 SYNONYMS = {
@@ -74,12 +74,15 @@ SYNONYMS = {
 }
 
 
-def resolve_categories(text: str | None) -> list[str]:
+def resolve_categories(text: str | None, user_id: int | None = None) -> list[str]:
     if not text:
         return []
     t = text.strip().lower()
     if t in BY_ID:
         return [t]
+    for c in custom_for(user_id):  # the user's own categories, by name
+        if t in (c.label.lower(), c.label.lower().replace("&", "and")):
+            return [c.id]
     if t in SYNONYMS:
         return SYNONYMS[t]
     for c in CATEGORIES:
@@ -266,7 +269,7 @@ class FinanceToolkit:
         end_date: str | None = None,
     ) -> dict[str, Any]:
         s, e, desc = self.period_range(period, start_date, end_date)
-        cats = resolve_categories(category)
+        cats = resolve_categories(category, self.user_id)
         if category and not cats:
             raise ValueError(f"Unknown category: {category}")
         m_q = (merchant or "").strip()
@@ -380,7 +383,7 @@ class FinanceToolkit:
         start_date: str | None = None,
         end_date: str | None = None,
     ) -> dict[str, Any]:
-        cats = resolve_categories(category)
+        cats = resolve_categories(category, self.user_id)
         if category and not cats:
             raise ValueError(f"Unknown category: {category}")
         if min_amount is not None and (not math.isfinite(min_amount) or min_amount < 0):

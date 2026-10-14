@@ -35,7 +35,7 @@ from typing import TYPE_CHECKING, Any
 
 from finpilot.domain.lexicon import KEYWORDS
 from finpilot.domain.normalize import normalize_text
-from finpilot.domain.taxonomy import BY_ID, CATEGORIES, label
+from finpilot.domain.taxonomy import BY_ID, categories_for, label
 
 if TYPE_CHECKING:
     from finpilot.services.toolkit import FinanceToolkit
@@ -313,23 +313,11 @@ class LedgerRetriever:
     def _described(self) -> dict[str, set[str]]:
         """Descriptor words per payee: its brand's enrichment, or — for an unknown local business —
         the enrichment of the kind of business its own name says it is ("SRI DURGA FUELS" → fuel)."""
-        from finpilot.domain.enrichment import BRAND_TAGS, describe, rule_category, word_forms
+        from finpilot.domain.enrichment import describe, word_forms
 
-        by_word: dict[str, list[str]] = defaultdict(list)
-        for rule_name, tags in BRAND_TAGS.items():
-            for w in normalize_text(tags).split():
-                by_word[w].append(rule_name)
         out: dict[str, set[str]] = {}
         for name in self._names:
             tags = describe(name, " ".join(self._descs.get(name, [])[:1]))
-            if not tags:
-                cat = self.merchants[name].categories.most_common(1)
-                top = cat[0][0] if cat else None
-                for word in normalize_text(name).split():
-                    for form in word_forms(word):
-                        for rule_name in by_word.get(form, []):
-                            if rule_category(rule_name) == top:
-                                tags += " " + BRAND_TAGS[rule_name]
             words: set[str] = set()
             for w in normalize_text(tags).split():
                 words |= word_forms(w)
@@ -425,7 +413,7 @@ class LedgerRetriever:
                 found[cat] = (score, why)
 
         hits: list[tuple[int, int, list[str], float, str]] = []
-        for c in CATEGORIES:
+        for c in categories_for(getattr(self.kit, "user_id", None)):
             for phrase in {c.label.upper().replace("&", " "), c.id.upper().replace("_", " ")}:
                 phrase = re.sub(r"\s+", " ", phrase).strip()
                 for m in re.finditer(rf"(?<![A-Z]){re.escape(phrase)}(?![A-Z])", q):

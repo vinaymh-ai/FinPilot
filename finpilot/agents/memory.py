@@ -668,7 +668,7 @@ class MemoryAgent(BaseAgent):
         for c in categories_for(self.kit.user_id):
             if t in (c.label.lower(), c.id, c.label.lower().replace("&", "and")):
                 return c.id
-        cands = resolve_categories(t)
+        cands = resolve_categories(t, self.kit.user_id)
         if len(cands) == 1:
             return cands[0]
         best = max(
@@ -941,6 +941,8 @@ class MemoryAgent(BaseAgent):
 
 
 def _spec_from_trace(trace: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The structured question behind an answer — from the SQL Analyst, or rebuilt from the
+    spending tools' arguments — so that "and in August?" can re-ask it with one aspect changed."""
     for t in trace:
         args = t.get("args") or {}
         if t.get("tool") == "query_ledger" and isinstance(args.get("spec"), dict):
@@ -949,7 +951,35 @@ def _spec_from_trace(trace: list[dict[str, Any]]) -> dict[str, Any] | None:
         for query in result.get("queries") or []:
             if isinstance(query, dict) and isinstance(query.get("spec"), dict):
                 return query["spec"]
+    for t in trace:
+        args, result = t.get("args") or {}, t.get("result") or {}
+        if "error" in result or t.get("tool") not in ("get_spending", "search_transactions"):
+            continue
+        cats = [c for c in _category_ids(args.get("category"))]
+        merchant = args.get("merchant") or (args.get("query") if t["tool"] == "search_transactions" else None)
+        spending = t["tool"] == "get_spending"
+        return {
+            "measure": "sum" if spending else "list",
+            "direction": "debit" if spending else None,
+            "spending_only": spending and not merchant,
+            "income_only": False,
+            "categories": cats,
+            "merchants": [merchant] if isinstance(merchant, str) and merchant.strip() else [],
+            "payee_source": "phrase" if merchant else None,
+            "start": result.get("start"),
+            "end": result.get("end"),
+            "period_label": result.get("period") or "all available history",
+            "question": None,
+        }
     return None
+
+
+def _category_ids(text: Any) -> list[str]:
+    if not isinstance(text, str) or not text.strip():
+        return []
+    from finpilot.services.toolkit import resolve_categories
+
+    return resolve_categories(text)
 
 
 def _ambiguous_term(question: str, options: list[str]) -> str | None:

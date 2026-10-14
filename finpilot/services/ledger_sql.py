@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 from finpilot.domain.normalize import CHANNELS, detect_channel, direction_of, payment_provider
 from finpilot.domain.recurring import monthly_equivalent
 from finpilot.domain.stats import add_months
-from finpilot.domain.taxonomy import BY_ID, CATEGORIES, is_spending_flow, label, transaction_kind
+from finpilot.domain.taxonomy import BY_ID, categories_for, is_spending_flow, label, transaction_kind
 
 if TYPE_CHECKING:
     from finpilot.services.toolkit import FinanceToolkit
@@ -213,7 +213,7 @@ class LedgerSQL:
         c.execute("CREATE TABLE categories (id TEXT, label TEXT, grp TEXT, description TEXT)")
         c.executemany(
             "INSERT INTO categories VALUES (?,?,?,?)",
-            [(x.id, x.label, x.group, x.description) for x in CATEGORIES],
+            [(x.id, x.label, x.group, x.description) for x in categories_for(self.kit.user_id)],
         )
         self._load_context()
         c.commit()
