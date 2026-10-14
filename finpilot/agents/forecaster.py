@@ -8,7 +8,7 @@ Model ("if you keep behaving like this"):
   double), with one-off anomalies removed. 400 Monte-Carlo paths give P10/P50/P90 bands.
 * **Goals** — funded in priority order from balance above a safety buffer; per-path funding
   gives a probability of hitting each goal, the projected shortfall and an ETA. A *spend* goal
-  (a trip, a laptop — classified by Jev from the goal's name) leaves the account on its deadline,
+  (a trip, a laptop — classified through API reasoning from its name) leaves the account on its deadline,
   so the balance bands, low point and overdraft risk include that outflow; a *reserve* goal
   (an emergency fund) stays in the account as earmarked savings.
 * **What-if** — a scenario (one-off purchase, new recurring cost, category cut, cancelled
@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+import zlib
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -27,7 +28,6 @@ from typing import Any
 import numpy as np
 
 from finpilot.agents.base import BaseAgent
-from finpilot.decisions.guard import check_faithfulness
 from finpilot.domain.recurring import RecurringCandidate, TxnLite
 from finpilot.domain.stats import add_months, month_key
 from finpilot.domain.taxonomy import DISCRETIONARY, ESSENTIAL, label
@@ -106,6 +106,7 @@ class ForecastEngine:
         n_paths: int = 400,
         seed: int = 42,
         safety_buffer: float | None = None,
+        balance_known: bool = True,
     ):
         if not math.isfinite(balance) or not isinstance(n_paths, int) or n_paths < 1:
             raise ValueError("Forecast requires a finite balance and at least one simulation path")
@@ -115,8 +116,9 @@ class ForecastEngine:
             raise ValueError("Transaction amounts must be finite")
         txns = [t for t in txns if t.date <= as_of]
         self.as_of = as_of
-        self.balance = float(balance)
-        self.goals = sorted(goals or [], key=lambda g: (g.priority, g.deadline))
+        self.balance_known = balance_known
+        self.balance = float(balance) if balance_known else 0.0
+        self.goals = sorted(goals or [], key=lambda g: (g.priority, g.deadline)) if balance_known else []
         self.recurring = [r for r in recurring if r.status == "active"]
         self.n_paths = n_paths
         self.seed = seed
@@ -163,6 +165,20 @@ class ForecastEngine:
         ]
         self.shock_rate = len(self.shock_pool) / history_days
         self._shocks = self._sample_shocks()
+        self._recurring_amounts: dict[str, list[float]] = {}
+        for r in self.recurring:
+            if r.category not in {"credit_card_payment", "utilities", "income"}:
+                continue
+            observations = [t for t in txns if t.id in set(r.txn_ids)]
+            if r.merchant == "Monthly card repayments":
+                monthly: dict[str, float] = defaultdict(float)
+                for t in observations:
+                    monthly[month_key(t.date)] += t.amount
+                amounts = list(monthly.values())
+            else:
+                amounts = [t.amount for t in observations]
+            if len(amounts) >= 3 and np.ptp(amounts) > 0.01:
+                self._recurring_amounts[r.merchant] = amounts
         self.safety_buffer = float(safety_buffer) if safety_buffer is not None else self._default_buffer()
 
     # ------------------------------------------------------------------ setup helpers
@@ -174,7 +190,12 @@ class ForecastEngine:
             if cols.size == 0:
                 continue
             ids, p = self._pool[w]
-            idx[:, cols] = rng.choice(ids, size=(self.n_paths, cols.size), p=p)
+            # Each path also samples uncertainty in the observed weekday distribution.
+            # Independent daily resampling alone treats a short history as a known spending rate
+            # and understates multi-month uncertainty, especially for irregular income.
+            weights = rng.dirichlet(p * len(ids), size=self.n_paths)
+            for path in range(self.n_paths):
+                idx[path, cols] = rng.choice(ids, size=cols.size, p=weights[path])
         return idx
 
     def _sample_shocks(self) -> np.ndarray:
@@ -251,7 +272,35 @@ class ForecastEngine:
         cat_mult: dict[str, np.ndarray] = {}
         extra = np.zeros(self.H)
         for a in adjustments:
-            start_i = self._index(a.date) if a.date else 0
+            if a.type not in {
+                "one_time",
+                "recurring",
+                "category_change",
+                "cancel_recurring",
+                "income_change",
+            }:
+                raise ValueError("Unknown scenario adjustment type")
+            if (
+                not math.isfinite(a.amount)
+                or a.amount < 0
+                or (a.pct is not None and (not math.isfinite(a.pct) or a.pct < -100))
+            ):
+                raise ValueError(
+                    "Scenario amounts must be finite and nonnegative; percentage cuts cannot exceed 100%"
+                )
+            if a.date and (
+                a.date < self.as_of
+                or a.date > self.dates[-1]
+                or (a.type == "one_time" and a.date == self.as_of)
+            ):
+                raise ValueError("Scenario date must be within the future forecast horizon")
+            if a.end_date and (a.end_date < (a.date or self.dates[0]) or a.end_date > self.dates[-1]):
+                raise ValueError("Scenario end date must follow its start within the forecast horizon")
+            if a.type == "one_time" and a.date is None:
+                raise ValueError("One-time scenarios require a date")
+            if a.type == "category_change" and a.category not in self.categories:
+                raise ValueError("Category has no variable cash flow in this forecast")
+            start_i = max(0, self._index(a.date)) if a.date else 0
             end_i = self._index(a.end_date) + 1 if a.end_date else self.H
             if a.type == "income_change" and a.pct is not None:
                 income_mult[start_i:end_i] *= 1 + a.pct / 100
@@ -262,7 +311,7 @@ class ForecastEngine:
                 if 0 <= start_i < self.H:
                     extra[start_i] += a.signed
             elif a.type == "recurring":
-                d = a.date or self.dates[0]
+                d = max(a.date or self.dates[0], self.dates[0])
                 while d <= self.dates[-1] and (a.end_date is None or d <= a.end_date):
                     i = self._index(d)
                     if 0 <= i < self.H:
@@ -279,6 +328,21 @@ class ForecastEngine:
                     )
 
         rec_flow, events = self._schedule(cancelled, income_mult)
+        recurring_noise = np.zeros((self.n_paths, self.H))
+        expected_noise = np.zeros(self.H)
+        for event in events:
+            amounts = self._recurring_amounts.get(event["merchant"])
+            if not amounts:
+                continue
+            i = self._index(dt.date.fromisoformat(event["date"]))
+            # Stable per-event draws keep scenario deltas independent of unrelated cancellations.
+            event_seed = zlib.crc32(f"{self.seed}:{event['merchant']}:{event['date']}".encode())
+            rng = np.random.default_rng(event_seed)
+            scale = income_mult[i] if event["amount"] > 0 else 1.0
+            recurring_noise[:, i] = (
+                recurring_noise[:, i] + rng.choice(amounts, self.n_paths) * scale - event["amount"]
+            )
+            expected_noise[i] += float(np.mean(amounts)) * scale - event["amount"]
         variable = self.T[self._idx].astype(float)  # (P, H)
         expected_var = self._weekday_mean(self.T)
         # income changes also scale non-recurring income (freelance payouts, bonuses)
@@ -292,10 +356,10 @@ class ForecastEngine:
             row = self.V[self.categories.index(cat)]
             variable += row[self._idx] * (mult - 1)
             expected_var += self._weekday_mean(row) * (mult - 1)
-        daily = variable + rec_flow + extra + self._shocks
+        daily = variable + rec_flow + extra + self._shocks + recurring_noise
         paths = self.balance + np.cumsum(daily, axis=1)
         shock_mean = self.shock_rate * (float(np.mean(self.shock_pool)) if self.shock_pool else 0.0)
-        expected = self.balance + np.cumsum(expected_var + rec_flow + extra + shock_mean)
+        expected = self.balance + np.cumsum(expected_var + rec_flow + extra + shock_mean + expected_noise)
         return _RunOutput(paths, expected, rec_flow), events
 
     def _index(self, d: dt.date) -> int:
@@ -321,7 +385,13 @@ class ForecastEngine:
             "as_of": self.as_of.isoformat(),
             "start_balance": round(self.balance, 2),
             "horizon_days": self.H,
-            "data_quality": {"lookback_days": self.L, "limited_history": self.L < LOOKBACK_DAYS},
+            "data_quality": {
+                "lookback_days": self.L,
+                "limited_history": self.L < LOOKBACK_DAYS,
+                "balance_known": self.balance_known,
+            },
+            "projection_type": "balance" if self.balance_known else "cashflow_change",
+            "variable_obligations": sorted(self._recurring_amounts),
             "safety_buffer": round(self.safety_buffer, 2),
             "low_point": {
                 "date": self.dates[low_i].isoformat(),
@@ -357,6 +427,15 @@ class ForecastEngine:
                 "p90": [round(float(x), 0) for x in p90[::step]],
                 "expected": [round(float(x), 0) for x in out.expected[::step]],
             }
+        if not self.balance_known:
+            res.update(start_balance=None, prob_overdraft=None, prob_below_buffer=None, first_risk_date=None)
+            res["required_starting_balance_p90"] = round(
+                max(0.0, self.safety_buffer - float(np.percentile(path_min, 10))), 2
+            )
+            res["assumptions"] = [
+                "Bands show net cash-flow change, not account balances.",
+                "Goal odds and affordability require a verified starting balance.",
+            ]
         return res
 
     def _checkpoints(self, p10: np.ndarray, p50: np.ndarray, p90: np.ndarray) -> list[dict[str, Any]]:
@@ -496,6 +575,15 @@ class ForecastEngine:
                 if abs(v) >= 1:
                     m["variable_by_category"][cat] = round(-v, 2)
         out_list = []
+        projected_net: dict[str, float] = defaultdict(float)
+        previous = self.balance
+        for date, value in zip(self.dates, out.expected, strict=True):
+            key = month_key(date)
+            months.setdefault(
+                key, {"month": key, "income": 0.0, "commitments": 0.0, "variable_by_category": {}}
+            )
+            projected_net[key] += float(value) - previous
+            previous = float(value)
         for k in sorted(months)[:4]:
             m = months[k]
             var_in = sum(-v for v in m["variable_by_category"].values() if v < 0)
@@ -503,7 +591,9 @@ class ForecastEngine:
             m["income"] = round(m["income"] + var_in, 2)
             m["commitments"] = round(m["commitments"], 2)
             m["variable_spend"] = round(var_out, 2)
-            m["net"] = round(m["income"] - m["commitments"] - var_out, 2)
+            component_net = m["income"] - m["commitments"] - var_out
+            m["other_projected_cashflow"] = round(projected_net[k] - component_net, 2)
+            m["net"] = round(projected_net[k], 2)
             m["partial"] = k == month_key(self.dates[0]) or k == month_key(self.dates[-1])
             out_list.append(m)
         return out_list
@@ -539,6 +629,9 @@ def _advance(d: dt.date, r: RecurringCandidate) -> dt.date:
 SYSTEM_PROMPT = """You are the Forecaster agent of FinPilot. You receive a Monte-Carlo cash-flow projection for ONE user
 (all numbers are already computed and correct). Explain it in 2-3 plain sentences, second person:
 where the balance is heading if current behaviour continues, the riskiest moment, and what it means for their goals.
+Check projection_type: cashflow_change means an unknown balance. Explain changes and required starting cash,
+never claim an absolute balance, overdraft risk or goal odds. Treat forecasts as conditional historical estimates,
+not guarantees. Explain sparse history, variable obligations and missing card purchase/usage details.
 Use only numbers present in the input; round sensibly. Currency: {currency}.
 Respond with JSON only: {{"narrative": "..."}}"""
 
@@ -565,6 +658,7 @@ class ForecasterAgent(BaseAgent):
         safety_buffer: float | None = None,
         horizon_days: int | None = None,
         seed: int = 42,
+        balance_known: bool = True,
     ) -> ForecastEngine:
         return ForecastEngine(
             txns,
@@ -577,6 +671,7 @@ class ForecasterAgent(BaseAgent):
             n_paths=self.n_paths,
             seed=seed,
             safety_buffer=safety_buffer,
+            balance_known=balance_known,
         )
 
     def forecast(self, eng: ForecastEngine, *, currency: str = "INR", narrate: bool = True) -> dict[str, Any]:
@@ -636,13 +731,17 @@ class ForecasterAgent(BaseAgent):
             "delta": {
                 "end_balance_p50": round(scen["end_balance"]["p50"] - base["end_balance"]["p50"], 2),
                 "low_point_p50": round(scen["low_point"]["p50"] - base["low_point"]["p50"], 2),
-                "prob_overdraft": round(scen["prob_overdraft"] - base["prob_overdraft"], 3),
-                "prob_below_buffer": round(scen["prob_below_buffer"] - base["prob_below_buffer"], 3),
+                "prob_overdraft": round(scen["prob_overdraft"] - base["prob_overdraft"], 3)
+                if eng.balance_known
+                else None,
+                "prob_below_buffer": round(scen["prob_below_buffer"] - base["prob_below_buffer"], 3)
+                if eng.balance_known
+                else None,
                 "goals": goals_delta,
             },
             "suggestions": [],
         }
-        if verdict != "affordable":
+        if eng.balance_known and verdict != "affordable":
             result["suggestions"] = self._suggestions(eng, adjustments, base, currency, search_wait)
         return result
 
@@ -652,6 +751,12 @@ class ForecasterAgent(BaseAgent):
     ) -> tuple[str, list[str]]:
         sym = {"INR": "₹", "USD": "$", "EUR": "€", "GBP": "£"}.get(currency, "")
         reasons: list[str] = []
+        if scen.get("projection_type") == "cashflow_change":
+            return "needs_balance", [
+                "The simulation measures cash-flow changes. A verified starting balance is needed to decide affordability.",
+                "Goal funding is excluded until a verified balance is available.",
+                f"Under the modeled cash flows, starting cash of {sym}{scen['required_starting_balance_p90']:,.2f} would preserve the buffer in 90% of paths; this is a model estimate.",
+            ]
         low10, low50 = scen["low_point"]["p10"], scen["low_point"]["p50"]
         verdict = "affordable"
         if scen["prob_overdraft"] >= 0.10:
@@ -780,6 +885,16 @@ class ForecasterAgent(BaseAgent):
         cps = {c["days"]: c for c in res["checkpoints"]}
         cp = cps.get(90) or (res["checkpoints"][-1] if res["checkpoints"] else None)
         parts = []
+        if res.get("projection_type") == "cashflow_change":
+            return (
+                (
+                    f"Your starting balance is unverified. Estimated net cash-flow change over {cp['days']} days is "
+                    f"{sym}{cp['p50']:,.2f} (P10 {sym}{cp['p10']:,.2f}; P90 {sym}{cp['p90']:,.2f}). "
+                    "These are changes, not account balances; goal odds and affordability need a verified balance."
+                )
+                if cp
+                else "A verified starting balance is needed for balance and goal projections."
+            )
         if cp:
             parts.append(
                 f"If you keep spending like this, your balance should be around {sym}{cp['p50']:,.0f} in "
@@ -812,6 +927,9 @@ class ForecasterAgent(BaseAgent):
                 "prob_overdraft",
                 "checkpoints",
                 "summary",
+                "projection_type",
+                "data_quality",
+                "variable_obligations",
             )
         }
         facts["goals"] = [
@@ -822,13 +940,12 @@ class ForecasterAgent(BaseAgent):
             for g in res["goals"]
         ]
         self.system_prompt = SYSTEM_PROMPT.format(currency=currency)
-        data, label_, _ = self.safe_ask_json(facts, max_tokens=400, temperature=0.2)
+        facts["required_starting_balance_p90"] = res.get("required_starting_balance_p90")
+        data, label_, _ = self.safe_ask_json(facts, max_tokens=1000, temperature=0.1)
         text = data.get("narrative") if isinstance(data, dict) else None
         if not text or not check_grounding(str(text), facts, strict=True)[0]:
             return fallback, "rules"
-        (verdict,) = check_faithfulness(
-            self.jev, [("forecast narrative", facts, str(text))], agent=self.name, enabled=self.use_jev
-        )
+        (verdict,) = self.validate([("forecast narrative", facts, str(text))])
         if not verdict.ok:
             return fallback, "rules"
         return str(text), label_ or "llm"

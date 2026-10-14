@@ -154,7 +154,7 @@ def eval_detectors(dsets: list[SynthDataset]) -> dict[str, Any]:
     a_tp = a_fp = a_fn = 0
     by_kind: Counter[str] = Counter()
     detected_kinds: Counter[str] = Counter()
-    unused_hits = unused_total = 0
+    unused_hits = unused_total = bank_usage_claims = 0
     for ds in dsets:
         res, _ = categorize(ds, OFFLINE)
         lite = lite_from(ds, res)
@@ -188,12 +188,21 @@ def eval_detectors(dsets: list[SynthDataset]) -> dict[str, Any]:
                 detected_kinds[ds.transactions[i].anomaly] += 1
         if ds.persona == "young_professional":
             unused_total += 1
-            unused_hits += int([s.merchant for s in report.subscriptions if s.unused] == ["Zomato Gold"])
+            bank_usage_claims += len([s for s in report.subscriptions if s.unused])
+            confirmed = AnalyzerAgent(router=OFFLINE, use_jev=False).analyze(
+                lite, series, narrate=False, usage_overrides={"Zomato Gold": "rarely_used"}
+            )
+            unused_hits += int([s.merchant for s in confirmed.subscriptions if s.unused] == ["Zomato Gold"])
     return {
         "recurring_series": prf(tp, fp, fn),
         "anomalies": prf(a_tp, a_fp, a_fn)
         | {"recall_by_type": {k: round(detected_kinds[k] / v, 3) for k, v in by_kind.items()}},
-        "unused_membership_detection": {"datasets": unused_total, "exact_match": unused_hits},
+        "unused_membership_detection": {
+            "datasets": unused_total,
+            "exact_match": unused_hits,
+            "basis": "Explicit user usage confirmation",
+            "unsupported_bank_only_claims": bank_usage_claims,
+        },
     }
 
 
@@ -449,7 +458,7 @@ def render_markdown(r: dict[str, Any]) -> str:
         "Anomaly recall by type: "
         + ", ".join(f"{k} {v * 100:.0f}%" for k, v in d["anomalies"]["recall_by_type"].items())
         + ".",
-        f"Unused-membership detection (Zomato Gold with no Zomato orders): "
+        f"Unused-membership handling (explicit user confirmation of Zomato Gold usage): "
         f"{d['unused_membership_detection']['exact_match']}/{d['unused_membership_detection']['datasets']} "
         f"datasets exactly right.",
         "",

@@ -4,7 +4,7 @@ Everything here is computed from the user's own history (no generic tips):
 * rolling 30-day windows vs the previous three 30-day windows → category spikes / drops
 * robust (median/MAD) outliers per category, duplicate charges, fees, big first-time merchants
 * recurring series → subscription inventory, overlaps, price hikes, *unused* memberships
-  (a Swiggy One membership with no Swiggy orders in 45+ days is provably unused)
+  (actual unused status requires user confirmation, not absence of bank purchases)
 * impulse purchases (late-night or outsized discretionary buys), weekday/weekend profile
 An optional LLM step turns the computed facts into a short behaviour profile (grounded).
 """
@@ -21,7 +21,6 @@ from typing import Any
 import numpy as np
 
 from finpilot.agents.base import BaseAgent
-from finpilot.decisions.guard import check_faithfulness
 from finpilot.domain.recurring import RecurringCandidate, TxnLite, monthly_equivalent
 from finpilot.domain.stats import month_key, pct_change, robust_z
 from finpilot.domain.taxonomy import DISCRETIONARY, NON_SPEND, is_spending_flow, label
@@ -99,16 +98,22 @@ class AnalysisReport:
         return d
 
 
-SYSTEM_PROMPT = """You are the Analyzer agent of FinPilot. You receive pre-computed statistics about ONE user's
-spending behaviour (all numbers are already correct). Write a behaviour profile: 3 to 4 short bullet points,
-second person, each one a specific observation about THIS user (patterns, habits, risks) — not generic advice.
-Only use numbers that appear in the input. Currency: {currency}.
+SYSTEM_PROMPT = """You are FinPilot's behavioral analyst. Interpret ONE user's computed ledger evidence.
+Identify the dominant spending/obligation patterns, changes supported by comparable windows, and anomalies
+that deserve investigation. Distinguish debt repayments, consumption, investments and transfers. A card
+bill reveals an obligation, not what was purchased. Amount and time alone do not prove impulse behavior.
+Respect coverage, incomplete months, classification uncertainty and missing usage evidence. If there is
+insufficient comparison history, say so rather than inventing a trend. Absence of in-bank purchases does
+not prove a membership is unused. Name the actual categories/merchants and cite the strongest evidence.
+Write 3-4 concise second-person observations; do not recommend actions or guess motives.
+Use exact figures supplied, retaining cents and assumptions. Currency: {currency}.
 Respond with JSON only: {{"profile": ["...", "..."]}}"""
 
 
 def _fmt(amount: float, currency: str) -> str:
     sym = {"INR": "₹", "USD": "$", "EUR": "€", "GBP": "£"}.get(currency, "")
-    return f"{sym}{abs(amount):,.0f}"
+    digits = 2 if round(abs(amount), 2) != round(abs(amount)) else 0
+    return f"{'-' if amount < 0 else ''}{sym}{abs(amount):,.{digits}f}"
 
 
 class AnalyzerAgent(BaseAgent):
@@ -151,6 +156,64 @@ class AnalyzerAgent(BaseAgent):
         findings += impulse_findings
         behavior = self._behavior(txns, as_of)
         findings += self._cashflow_findings(windows, months)
+        recent = [t for t in txns if as_of - dt.timedelta(days=30) < t.date <= as_of]
+        cash_in = round(sum(t.amount for t in recent if t.amount > 0), 2)
+        cash_out = round(sum(-t.amount for t in recent if t.amount < 0), 2)
+        debt = [t for t in recent if t.amount < 0 and t.category in {"loans", "credit_card_payment"}]
+        debt_total = round(sum(-t.amount for t in debt), 2)
+        if debt and windows["last_30d_income"] > 0 and debt_total / windows["last_30d_income"] >= 0.4:
+            findings.append(
+                Finding(
+                    "debt_obligations",
+                    "warning",
+                    "Repayments take a large share of recorded income",
+                    f"Loan and credit-card repayments total {_fmt(debt_total, currency)} in the last 30 days. Card bills do not reveal the original purchases.",
+                    {
+                        "key": "debt",
+                        "repayments": debt_total,
+                        "income": windows["last_30d_income"],
+                        "share_pct": round(debt_total / windows["last_30d_income"] * 100, 2),
+                        "start": (as_of - dt.timedelta(days=29)).isoformat(),
+                        "end": as_of.isoformat(),
+                        "payments": [
+                            {
+                                "id": t.id,
+                                "merchant": t.merchant,
+                                "amount": -t.amount,
+                                "date": t.date.isoformat(),
+                                "category": t.category,
+                            }
+                            for t in debt
+                        ],
+                    },
+                    [t.id for t in debt],
+                )
+            )
+        windows["bank_cashflow"] = {
+            "inflows": cash_in,
+            "outflows": cash_out,
+            "net": round(cash_in - cash_out, 2),
+            "excluded_from_spending": round(
+                cash_out - sum(-t.amount for t in recent if t.amount < 0 and t.category not in NON_SPEND), 2
+            ),
+            "transaction_ids": [t.id for t in recent],
+        }
+        if cash_in > 0 and cash_out >= cash_in * 0.95:
+            findings.append(
+                Finding(
+                    "bank_cashflow_tight",
+                    "warning",
+                    "Bank outflows leave little recorded cash surplus",
+                    f"Recorded cash inflows {_fmt(cash_in, currency)} and outflows {_fmt(cash_out, currency)} leave {_fmt(cash_in - cash_out, currency)} net; transfers and investments are included in bank cash flow.",
+                    {
+                        "key": "bank_net",
+                        **windows["bank_cashflow"],
+                        "start": (as_of - dt.timedelta(days=29)).isoformat(),
+                        "end": as_of.isoformat(),
+                    },
+                    [t.id for t in recent],
+                )
+            )
 
         sev_rank = {"critical": 0, "warning": 1, "positive": 2, "info": 3}
         findings.sort(key=lambda f: (sev_rank.get(f.severity, 9), -abs(f.metrics.get("impact", 0))))
@@ -499,12 +562,11 @@ class AnalyzerAgent(BaseAgent):
                 last = last_activity.get(r.parent)
                 idle = (as_of - last).days if last else None
                 if last is None or idle >= MEMBERSHIP_IDLE_DAYS:
-                    unused = True
                     signal = (
                         f"No {r.parent} orders since {last:%d %b} ({idle} days)"
                         if last
                         else f"No {r.parent} orders in your history"
-                    )
+                    ) + "; bank history cannot establish actual usage"
                 else:
                     signal = f"Last {r.parent} order {idle} days ago"
             user_flag = usage_overrides.get(r.merchant)
@@ -704,9 +766,9 @@ class AnalyzerAgent(BaseAgent):
                 Finding(
                     "savings_rate",
                     sev,
-                    f"You kept {rate:.0f}% of your income in the last 30 days",
+                    f"Income minus spending is {rate:.0f}% before transfers and investments",
                     f"Income {_fmt(inc, self.currency)}, spending {_fmt(spend, self.currency)} "
-                    f"(excluding transfers and investments).",
+                    f"(excluding transfers and investments); this is not the bank cash surplus.",
                     {
                         "key": "savings_rate",
                         "income": round(inc, 2),
@@ -775,21 +837,17 @@ class AnalyzerAgent(BaseAgent):
                 k: report.impulse.get(k) for k in ("recent_count", "recent_total", "share_of_discretionary")
             },
             "findings": [{"title": f.title, "detail": f.detail} for f in report.findings[:8]],
+            "data_quality": report.data_quality,
         }
         fallback = self._rules_profile(report)
         if not self.llm_available:
             return fallback, "rules"
         self.system_prompt = SYSTEM_PROMPT.format(currency=report.currency)
-        data, label_, _err = self.safe_ask_json(facts, max_tokens=500, temperature=0.2)
+        data, label_, _err = self.safe_ask_json(facts, max_tokens=1400, temperature=0.1)
         bullets = data.get("profile") if isinstance(data, dict) else None
         if not isinstance(bullets, list) or not bullets:
             return fallback, "rules"
         good = [str(b) for b in bullets[:4] if check_grounding(str(b), facts, strict=True)[0]]
-        verdicts = check_faithfulness(
-            self.jev,
-            [(f"profile bullet {i + 1}", facts, b) for i, b in enumerate(good)],
-            agent=self.name,
-            enabled=self.use_jev,
-        )
+        verdicts = self.validate([(f"profile bullet {i + 1}", facts, b) for i, b in enumerate(good)])
         good = [b for b, v in zip(good, verdicts, strict=True) if v.ok]
         return (good, label_ or "llm") if good else (fallback, "rules")

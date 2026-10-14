@@ -271,16 +271,16 @@ export default function Simulator() {
                 )}
               </Card>
               <Card>
-                <CardHeader title="Baseline vs with this decision" subtitle="Median path and P10–P90 band for both" />
+                <CardHeader title="Baseline vs with this decision" subtitle={r.baseline.projection_type === "cashflow_change" ? "Net cash-flow changes; starting balance unverified" : "Median path and P10–P90 band for both"} />
                 <div className="px-2 pb-4">
                   <ForecastChart forecast={r.baseline} scenario={r.scenario} height={320} />
                 </div>
               </Card>
               <div className="grid gap-4 md:grid-cols-3">
                 {[
-                  ["End balance (P50)", r.scenario.end_balance.p50, r.delta.end_balance_p50],
+                  [r.scenario.projection_type === "cashflow_change" ? "End cash-flow change (P50)" : "End balance (P50)", r.scenario.end_balance.p50, r.delta.end_balance_p50],
                   ["Lowest point (P50)", r.scenario.low_point.p50, r.delta.low_point_p50],
-                  ["Worst-case low (P10)", r.scenario.low_point.p10, r.scenario.low_point.p10 - r.baseline.low_point.p10],
+                  ["Lower estimate (P10)", r.scenario.low_point.p10, r.scenario.low_point.p10 - r.baseline.low_point.p10],
                 ].map(([k, v, d]) => (
                   <Card key={k as string} className="p-4">
                     <div className="text-[12.5px] text-muted">{k}</div>

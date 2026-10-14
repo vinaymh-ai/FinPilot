@@ -12,6 +12,7 @@ Approach (no LLM needed):
 from __future__ import annotations
 
 import datetime as dt
+import re
 import statistics
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -236,7 +237,12 @@ def detect_recurring(txns: list[TxnLite], as_of: dt.date | None = None) -> list[
     for t in txns:
         if t.category in SKIP_CATEGORIES or t.amount == 0:
             continue
-        groups[(t.merchant, t.amount > 0)].append(t)
+        identity = t.merchant
+        if t.category == "loans" and (
+            match := re.search(r"\b(?:personal\s+)?loan\s+(X{2,}[A-Z0-9]+)\b", t.description, re.IGNORECASE)
+        ):
+            identity = "Loan contract " + match[1].upper()
+        groups[(identity, t.amount > 0)].append(t)
 
     found: list[RecurringCandidate] = []
     for (_merchant, _credit), items in groups.items():
@@ -253,6 +259,28 @@ def detect_recurring(txns: list[TxnLite], as_of: dt.date | None = None) -> list[
             cand = _evaluate(cluster, as_of, variable=False, group_size=len(items))
             if cand is not None:
                 found.append(cand)
+    # Repayment platforms may change, and several distinct card bills may be paid on one day.
+    # Forecast their observed monthly cash obligation without claiming they are the same card.
+    card_rows = [t for t in txns if t.category == "credit_card_payment" and t.amount < 0]
+    card_months: dict[str, list[TxnLite]] = defaultdict(list)
+    for t in card_rows:
+        card_months[t.date.strftime("%Y-%m")].append(t)
+    if len(card_months) >= 3:
+        aggregates = [
+            TxnLite(
+                items[-1].id,
+                max(t.date for t in items),
+                sum(t.amount for t in items),
+                "Monthly card repayments",
+                "credit_card_payment",
+            )
+            for items in card_months.values()
+        ]
+        card = _evaluate(aggregates, as_of, variable=True)
+        if card and card.cadence == "monthly":
+            card.txn_ids = [t.id for t in card_rows]
+            found = [r for r in found if r.category != "credit_card_payment"]
+            found.append(card)
     found.sort(key=lambda c: c.typical_amount)
     return found
 

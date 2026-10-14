@@ -272,6 +272,10 @@ class LLMRouter:
                     temperature=temp,
                     max_tokens=max_tokens,
                 )
+                if not json_mode and any(
+                    c.get("finish_reason") == "length" for c in (resp.raw or {}).get("choices", [])
+                ):
+                    raise LLMError("Model response was truncated; incomplete answers must not be displayed")
             except Exception as exc:  # noqa: BLE001 - provider errors are heterogeneous
                 msg = f"{spec.name}:{model}: {type(exc).__name__}: {str(exc)[:300]}"
                 if isinstance(exc, APIConnectionError):
@@ -290,7 +294,17 @@ class LLMRouter:
                 )
                 continue
             if cache_key and resp.content:
-                self._cache_put(cache_key, model, resp.content)
+                try:
+                    if json_mode:
+                        if any(
+                            c.get("finish_reason") == "length" for c in (resp.raw or {}).get("choices", [])
+                        ):
+                            raise ValueError("Truncated structured response")
+                        extract_json(resp.content)
+                except ValueError:
+                    pass  # incomplete structured output must never become a reusable cache hit
+                else:
+                    self._cache_put(cache_key, model, resp.content)
             self._record(agent, resp, success=True, request=request)
             return resp
         raise LLMError("; ".join(errors) or "all providers failed")
@@ -299,7 +313,22 @@ class LLMRouter:
         self, messages: list[dict[str, Any]], *, agent: str, **kwargs: Any
     ) -> tuple[Any, LLMResponse]:
         resp = self.chat(messages, agent=agent, json_mode=True, **kwargs)
-        return extract_json(resp.content or ""), resp
+        choices = (resp.raw or {}).get("choices") or []
+        truncated = bool(choices and choices[0].get("finish_reason") == "length")
+        try:
+            if truncated:
+                raise ValueError("Truncated structured response")
+            return extract_json(resp.content or ""), resp
+        except ValueError:
+            if not truncated and not resp.cached:
+                raise
+            retry = dict(
+                kwargs, cache=False, max_tokens=min(6000, max(2000, int(kwargs.get("max_tokens", 1200)) * 2))
+            )
+            repaired = self.chat(messages, agent=agent, json_mode=True, **retry)
+            if any(c.get("finish_reason") == "length" for c in (repaired.raw or {}).get("choices", [])):
+                raise ValueError("Structured response remained truncated after the bounded retry") from None
+            return extract_json(repaired.content or ""), repaired
 
     def _call(
         self,

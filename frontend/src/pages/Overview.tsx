@@ -125,9 +125,9 @@ export default function Overview() {
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Stat
           label="Balance"
-          value={money(o.balance)}
+          value={o.data_quality?.balance_known ? money(o.balance) : "Unverified"}
           icon={<Wallet className="size-4" />}
-          hint={cp30 ? `→ ${money(cp30.p50, { compact: true })} in 30 days` : `as of ${date(o.as_of)}`}
+          hint={fc?.projection_type === "cashflow_change" ? "Set your balance in Settings" : cp30 ? `→ ${money(cp30.p50, { compact: true })} in 30 days` : `as of ${date(o.as_of)}`}
           tone={cp30 && cp30.p50 >= o.balance ? "up" : "down"}
         />
         <Stat
@@ -140,7 +140,7 @@ export default function Overview() {
           label="Savings rate · 30 days"
           value={pct(rate)}
           icon={<PiggyBank className="size-4" />}
-          hint={rate !== null && rate < 0 ? "spending exceeded income" : "of income kept"}
+          hint={rate !== null && rate < 0 ? "spending exceeded income" : "before transfers and investments"}
           tone={rate !== null && rate >= 20 ? "up" : rate !== null && rate < 5 ? "down" : "neutral"}
         />
         <Stat
@@ -158,7 +158,7 @@ export default function Overview() {
             title="Where your money is heading"
             subtitle={
               fc
-                ? `400 simulated futures from your own behaviour · shaded = likely range (P10–P90)`
+                ? `${fc.projection_type === "cashflow_change" ? "Net cash-flow changes; starting balance unverified" : "Balance estimates"} · shaded = P10–P90 range`
                 : "No forecast yet"
             }
             icon={<LineChart className="size-4" />}
@@ -173,10 +173,10 @@ export default function Overview() {
               <ForecastChart forecast={fc} height={300} />
               <div className="grid grid-cols-2 gap-3 px-3 pt-2 sm:grid-cols-4">
                 {[
-                  ["In 90 days", cp90 ? money(cp90.p50) : "–"],
+                  [fc.projection_type === "cashflow_change" ? "90-day cash-flow change" : "In 90 days", cp90 ? money(cp90.p50) : "–"],
                   ["Tightest point", `${money(fc.low_point.p50, { compact: true })} · ${date(fc.low_point.date)}`],
                   ["Avg monthly net", money(fc.summary.avg_monthly_net, { sign: true })],
-                  ["Overdraft risk", pct(fc.prob_overdraft * 100)],
+                  ["Overdraft risk", fc.prob_overdraft === null ? "Needs verified balance" : pct(fc.prob_overdraft * 100)],
                 ].map(([k, v]) => (
                   <div key={k} className="rounded-xl bg-surface-2/70 px-3 py-2">
                     <div className="text-[11.5px] text-muted">{k}</div>

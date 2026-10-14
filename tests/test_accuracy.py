@@ -75,15 +75,17 @@ def test_greeting_uses_llm_without_financial_tools_or_jev(ledger, fake_router_fa
 def test_llm_narrates_exact_merchant_total_when_jev_is_unavailable(ledger, fake_router_factory):
     def respond(messages, opts):
         payload = json.loads(messages[-1]["content"])
-        if "facts" in payload:
-            return {"supported": True}
+        if "question" in payload and "tools" in payload:
+            return {"calls": [{"tool": "get_spending", "args": {"merchant": "Rahul", "period": "all_time"}}]}
+        if "items" in payload:
+            return {"results": [{"id": i["id"], "supported": True} for i in payload["items"]]}
         assert payload["retrieval"][0]["args"]["merchant"] == "Rahul"
         return "You sent ₹300.75 to Rahul across 2 recorded transactions."
 
     router = fake_router_factory(respond)
     answer = ChatAgent(router=router, use_jev=False).answer(ledger, "How much did I send to Rahul?")
     assert answer["model"] != "rules" and "₹300.75" in answer["answer"]
-    assert len(router.calls) == 2 and answer["guard"]["ok"]
+    assert len(router.calls) == 3 and answer["guard"]["ok"]
     assert answer["trace"][0]["result"]["total"] == 300.75
 
 
@@ -92,7 +94,11 @@ def test_borderline_supported_verdict_requires_independent_check(
 ):
     def respond(messages, opts):
         payload = json.loads(messages[-1]["content"])
-        return {"supported": True} if "facts" in payload else "You sent ₹300.75 to Rahul in 2 transactions."
+        return (
+            {"results": [{"id": i["id"], "supported": True} for i in payload["items"]]}
+            if "items" in payload
+            else "You sent ₹300.75 to Rahul in 2 transactions."
+        )
 
     router = fake_router_factory(respond)
     _, jev = fake_jev_factory(
@@ -107,15 +113,14 @@ def test_borderline_supported_verdict_requires_independent_check(
     )
     answer = ChatAgent(router=router, jev=jev).answer(ledger, "How much did I send to Rahul?")
     assert answer["model"] != "rules" and len(router.calls) == 2
-    assert answer["guard"]["label"] == "llm_fact_check" and answer["guard"]["ok"]
-    assert answer["guard"]["jev_p_supported"] == 0.57
+    assert answer["guard"]["label"] == "supported" and answer["guard"]["ok"]
 
 
 def test_rejected_llm_answer_preserves_exact_total(ledger, fake_router_factory):
     router = fake_router_factory(lambda m, o: "You spent ₹999.99 at Netflix.")
     answer = ChatAgent(router=router, use_jev=False).answer(ledger, "How much did I send to Rahul?")
     assert answer["model"] == "rules" and "Netflix" not in answer["answer"]
-    assert answer["trace"][0]["result"]["total"] == 300.75 and len(router.calls) == 2
+    assert answer["trace"][0]["result"]["total"] == 300.75 and len(router.calls) == 3
 
 
 def test_planner_retains_reasoned_provider_classification(ledger):
@@ -513,8 +518,11 @@ def test_unknown_balance_does_not_produce_an_affordability_claim_or_goal_forecas
     ledger.user.balance_source = "derived"
     ledger.session.commit()
     result = Coordinator(use_llm=False, use_jev=False).run_pipeline()
-    assert "forecast" not in result["summary"]["plan"]
-    assert repo.latest_forecast(ledger.session, 1) is None
+    assert "forecast" in result["summary"]["plan"] and "advise" in result["summary"]["plan"]
+    forecast = repo.latest_forecast(ledger.session, 1).payload
+    assert forecast["projection_type"] == "cashflow_change"
+    assert forecast["prob_overdraft"] is None and forecast["start_balance"] is None
+    assert forecast["goals"] == []
     answer = ChatAgent(use_llm=False, use_jev=False).answer(ledger, "Can I afford a ₹2000 phone?")
     assert "verified" in answer["answer"]
     assert "Yes" not in answer["answer"] and "It's a stretch" not in answer["answer"]

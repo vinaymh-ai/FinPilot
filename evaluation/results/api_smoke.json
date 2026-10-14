@@ -1,0 +1,74 @@
+{
+  "measured_at": "2026-10-13",
+  "provider": "freellmapi",
+  "requested_model": "auto:smart",
+  "sample_size": 8,
+  "correct": 8,
+  "results": [
+    {
+      "case": "cred_bill",
+      "expected": "credit_card_payment",
+      "actual": "credit_card_payment",
+      "source": "llm",
+      "confidence": 0.75,
+      "correct": true
+    },
+    {
+      "case": "kiwi_card",
+      "expected": "credit_card_payment",
+      "actual": "credit_card_payment",
+      "source": "llm",
+      "confidence": 0.9,
+      "correct": true
+    },
+    {
+      "case": "platform_food",
+      "expected": "food_delivery",
+      "actual": "food_delivery",
+      "source": "llm",
+      "confidence": 0.95,
+      "correct": true
+    },
+    {
+      "case": "platform_rent",
+      "expected": "rent",
+      "actual": "rent",
+      "source": "llm",
+      "confidence": 0.95,
+      "correct": true
+    },
+    {
+      "case": "unclear_person",
+      "expected": "other",
+      "actual": "other",
+      "source": "llm",
+      "confidence": 0.5,
+      "correct": true
+    },
+    {
+      "case": "salary",
+      "expected": "income",
+      "actual": "income",
+      "source": "llm",
+      "confidence": 0.95,
+      "correct": true
+    },
+    {
+      "case": "emi",
+      "expected": "loans",
+      "actual": "loans",
+      "source": "llm",
+      "confidence": 0.95,
+      "correct": true
+    },
+    {
+      "case": "subscription",
+      "expected": "subscriptions",
+      "actual": "subscriptions",
+      "source": "llm",
+      "confidence": 0.95,
+      "correct": true
+    }
+  ],
+  "limitation": "Small targeted synthetic narration check; not a general accuracy benchmark. No user ledger or chat content is included."
+}

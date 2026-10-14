@@ -127,10 +127,6 @@ class FinanceToolkit:
         return dt.datetime.now(ZoneInfo(get_settings().timezone)).date()
 
     def engine(self, seed: int = 42) -> ForecastEngine:
-        if not self.data_quality()["balance_known"]:
-            raise ValueError(
-                "Set a verified account balance in Settings or upload a statement with balances before forecasting."
-            )
         s = get_settings()
         return ForecasterAgent(use_llm=False, n_paths=s.monte_carlo_paths).engine(
             self.txns,
@@ -139,9 +135,10 @@ class FinanceToolkit:
             as_of=self.as_of,
             goals=self.goals,
             exclude_ids={t.id for t in self.rows if t.is_anomaly},
-            safety_buffer=self.user.safety_buffer or s.safety_buffer,
+            safety_buffer=self.user.safety_buffer if self.user.safety_buffer is not None else s.safety_buffer,
             horizon_days=s.forecast_horizon_days,
             seed=seed,
+            balance_known=self.data_quality()["balance_known"],
         )
 
     def money(self, x: float) -> str:
@@ -318,6 +315,61 @@ class FinanceToolkit:
             "data_as_of": self.as_of.isoformat(),
         }
 
+    def rank_spending(
+        self,
+        group_by: str = "transaction",
+        period: str = "all_time",
+        limit: int = 5,
+        category: str | None = None,
+        merchant: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> dict[str, Any]:
+        """Rank real expenses; transfers and investments are not consumption expenses."""
+        if group_by not in {"transaction", "category", "merchant"}:
+            raise ValueError("group_by must be transaction, category or merchant")
+        if type(limit) is not int or not 1 <= limit <= 50:
+            raise ValueError("limit must be an integer between 1 and 50")
+        totals = self.get_spending(category, merchant, period, start_date, end_date)
+        ids = set(totals["transaction_ids"])
+        rows = [t for t in self.txns if t.id in ids and t.category not in NON_SPEND]
+        ranked = []
+        if group_by == "transaction":
+            ranked = [
+                {
+                    "id": t.id,
+                    "date": t.date.isoformat(),
+                    "merchant": t.merchant,
+                    "category": label(t.category),
+                    "amount": round(-t.amount, 2),
+                }
+                for t in sorted(rows, key=lambda t: (-abs(t.amount), t.date, t.id))
+            ]
+        else:
+            groups = defaultdict(list)
+            for t in rows:
+                groups[label(t.category) if group_by == "category" else t.merchant].append(t)
+            ranked = [
+                {
+                    "name": name,
+                    "amount": float(sum((-Decimal(str(t.amount)) for t in items), Decimal(0))),
+                    "count": len(items),
+                    "transaction_ids": [t.id for t in items],
+                }
+                for name, items in groups.items()
+            ]
+            ranked.sort(key=lambda r: (-r["amount"], r["name"]))
+        return {
+            "group_by": group_by,
+            "start": totals["start"],
+            "end": totals["end"],
+            "ranked": ranked[:limit],
+            "eligible_count": len(rows),
+            "truncated": len(ranked) > limit,
+            "definition": "Recorded expense debits, including debt/card repayments; excluding transfers and investments.",
+            "data_as_of": self.as_of.isoformat(),
+        }
+
     def search_transactions(
         self,
         query: str | None = None,
@@ -442,6 +494,8 @@ class FinanceToolkit:
             }
         return {
             "start_balance": res["start_balance"],
+            "projection_type": res["projection_type"],
+            "required_starting_balance_p90": res.get("required_starting_balance_p90"),
             "as_of": res["as_of"],
             "at_date": at,
             "checkpoints": res["checkpoints"],
@@ -456,10 +510,6 @@ class FinanceToolkit:
         }
 
     def simulate(self, adjustments: list[dict[str, Any]], full: bool = False) -> dict[str, Any]:
-        if not self.data_quality()["balance_known"]:
-            raise ValueError(
-                "Set a verified account balance in Settings or upload a statement with balances before checking affordability."
-            )
         adjs = [parse_adjustment(a, self.as_of) for a in adjustments or []]
         if not adjs:
             return {"error": "no valid adjustments"}
@@ -468,6 +518,9 @@ class FinanceToolkit:
             return res
         return {
             "verdict": res["verdict"],
+            "projection_type": res["scenario"]["projection_type"],
+            "required_starting_balance_p90": res["scenario"].get("required_starting_balance_p90"),
+            "delta": res["delta"],
             "reasons": res["reasons"],
             "adjustments": [a["description"] for a in res["adjustments"]],
             "baseline": {
@@ -486,7 +539,22 @@ class FinanceToolkit:
 
     def get_goals(self) -> dict[str, Any]:
         if not self.data_quality()["balance_known"]:
-            return {"goals": [], "needs_balance": True}
+            return {
+                "goals": [
+                    {
+                        "name": g.name,
+                        "target": g.target,
+                        "saved": g.saved,
+                        "remaining": round(max(0, g.target - g.saved), 2),
+                        "deadline": str(g.deadline),
+                        "probability": None,
+                        "status": "achieved" if g.saved >= g.target else "needs_balance",
+                    }
+                    for g in self.goals
+                ],
+                "needs_balance": True,
+                "explanation": "Recorded goal progress is available; forecast odds need a verified balance.",
+            }
         f = repo.latest_forecast(self.session, self.user_id)
         if f is not None:
             return {"goals": f.payload.get("goals", []), "as_of": f.payload.get("as_of")}
@@ -627,6 +695,19 @@ def _tool(
 
 
 TOOL_SPECS: list[dict[str, Any]] = [
+    _tool(
+        "rank_spending",
+        "Rank largest individual expenses, categories or merchants. Use transaction for 'biggest expense', category for 'biggest category', merchant for 'where do I spend most'. Transfers/investments excluded.",
+        {
+            "group_by": {"type": "string", "enum": ["transaction", "category", "merchant"]},
+            "period": {"type": "string"},
+            "category": {"type": "string"},
+            "merchant": {"type": "string"},
+            "start_date": {"type": "string"},
+            "end_date": {"type": "string"},
+            "limit": {"type": "integer"},
+        },
+    ),
     _tool(
         "get_overview",
         "Balance, last-30-day income/spend/savings rate, top categories, subscriptions, goals.",

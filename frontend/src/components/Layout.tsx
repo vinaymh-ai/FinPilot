@@ -185,12 +185,12 @@ export default function Layout({ children }: { children: ReactNode }) {
                 Jev via <span className="text-ink">{meta.decisions.split(":")[0]}</span> (System One)
               </span>
             ) : (
-              <span>Rules — add a Mesh key to let Jev decide.</span>
+              <span>LLM API reasoning with verified financial tools</span>
             )}
           </div>
           <div>
             <div className="mb-0.5 flex items-center gap-1.5 font-medium text-ink">
-              <Bot className="size-3.5 text-brand" /> Writing (LLM)
+              <Bot className="size-3.5 text-brand" /> Reasoning (LLM API)
             </div>
             {llmAgents.length ? (
               <span>

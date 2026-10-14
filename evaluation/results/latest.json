@@ -1,285 +1,285 @@
 {
-  "generated_at": "2026-10-12 21:29",
+  "generated_at": "2026-10-13 18:04",
   "mode": "deterministic (no LLM)",
   "seeds": [
     1,
-    2,
-    3
+    2
   ],
   "categorization": {
-    "transactions": 5631,
-    "datasets": 9,
+    "transactions": 3706,
+    "datasets": 6,
     "ablation": {
       "1_lexicon_only": {
-        "accuracy": 0.7903,
-        "macro_f1": 0.8267,
+        "accuracy": 0.7852,
+        "macro_f1": 0.8277,
         "accuracy_known_merchants": 1.0,
-        "accuracy_long_tail": 0.0383
+        "accuracy_long_tail": 0.0375
       },
       "2_plus_keywords": {
-        "accuracy": 0.9339,
-        "macro_f1": 0.9026,
+        "accuracy": 0.894,
+        "macro_f1": 0.8615,
         "accuracy_known_merchants": 1.0,
-        "accuracy_long_tail": 0.6971
+        "accuracy_long_tail": 0.5248
       },
       "3_plus_patterns (deterministic)": {
-        "accuracy": 0.9339,
-        "macro_f1": 0.9026,
+        "accuracy": 0.894,
+        "macro_f1": 0.8615,
         "accuracy_known_merchants": 1.0,
-        "accuracy_long_tail": 0.6971,
+        "accuracy_long_tail": 0.5248,
         "per_category": {
           "cash": {
             "precision": 1.0,
             "recall": 1.0,
             "f1": 1.0,
-            "tp": 77,
+            "tp": 52,
             "fp": 0,
             "fn": 0,
-            "support": 77
+            "support": 52
           },
           "dining": {
             "precision": 1.0,
-            "recall": 0.714,
-            "f1": 0.8332,
-            "tp": 402,
+            "recall": 0.7078,
+            "f1": 0.8289,
+            "tp": 264,
             "fp": 0,
-            "fn": 161,
-            "support": 563
+            "fn": 109,
+            "support": 373
           },
           "education": {
             "precision": 1.0,
-            "recall": 0.6909,
-            "f1": 0.8172,
-            "tp": 38,
+            "recall": 0.7419,
+            "f1": 0.8519,
+            "tp": 23,
             "fp": 0,
-            "fn": 17,
-            "support": 55
+            "fn": 8,
+            "support": 31
           },
           "entertainment": {
             "precision": 1.0,
-            "recall": 0.9216,
-            "f1": 0.9592,
-            "tp": 141,
+            "recall": 0.9245,
+            "f1": 0.9608,
+            "tp": 98,
             "fp": 0,
-            "fn": 12,
-            "support": 153
+            "fn": 8,
+            "support": 106
           },
           "fees": {
             "precision": 1.0,
             "recall": 1.0,
             "f1": 1.0,
-            "tp": 9,
+            "tp": 6,
             "fp": 0,
             "fn": 0,
-            "support": 9
+            "support": 6
           },
           "food_delivery": {
             "precision": 1.0,
             "recall": 1.0,
             "f1": 1.0,
-            "tp": 1125,
+            "tp": 727,
             "fp": 0,
             "fn": 0,
-            "support": 1125
+            "support": 727
           },
           "gifts_donations": {
             "precision": 1.0,
             "recall": 1.0,
             "f1": 1.0,
-            "tp": 37,
+            "tp": 19,
             "fp": 0,
             "fn": 0,
-            "support": 37
+            "support": 19
           },
           "groceries": {
             "precision": 1.0,
-            "recall": 0.9451,
-            "f1": 0.9718,
-            "tp": 878,
+            "recall": 0.9353,
+            "f1": 0.9666,
+            "tp": 564,
             "fp": 0,
-            "fn": 51,
-            "support": 929
+            "fn": 39,
+            "support": 603
           },
           "health": {
             "precision": 1.0,
             "recall": 1.0,
             "f1": 1.0,
-            "tp": 156,
+            "tp": 100,
             "fp": 0,
             "fn": 0,
-            "support": 156
+            "support": 100
           },
           "income": {
             "precision": 1.0,
             "recall": 1.0,
             "f1": 1.0,
-            "tp": 83,
+            "tp": 56,
             "fp": 0,
             "fn": 0,
-            "support": 83
+            "support": 56
           },
           "insurance": {
             "precision": 1.0,
             "recall": 1.0,
             "f1": 1.0,
-            "tp": 12,
+            "tp": 8,
             "fp": 0,
             "fn": 0,
-            "support": 12
+            "support": 8
           },
           "investments": {
             "precision": 1.0,
             "recall": 1.0,
             "f1": 1.0,
-            "tp": 48,
+            "tp": 32,
             "fp": 0,
             "fn": 0,
-            "support": 48
+            "support": 32
           },
           "loans": {
             "precision": 1.0,
             "recall": 1.0,
             "f1": 1.0,
-            "tp": 48,
+            "tp": 32,
             "fp": 0,
             "fn": 0,
-            "support": 48
+            "support": 32
           },
           "other": {
-            "precision": 0.0842,
-            "recall": 0.5106,
-            "f1": 0.1446,
-            "tp": 24,
-            "fp": 261,
-            "fn": 23,
-            "support": 47
+            "precision": 0.0824,
+            "recall": 1.0,
+            "f1": 0.1523,
+            "tp": 31,
+            "fp": 345,
+            "fn": 0,
+            "support": 31
           },
           "personal_care": {
-            "precision": 0.4333,
-            "recall": 0.629,
-            "f1": 0.5132,
-            "tp": 39,
-            "fp": 51,
-            "fn": 23,
-            "support": 62
+            "precision": 0.4,
+            "recall": 0.619,
+            "f1": 0.486,
+            "tp": 26,
+            "fp": 39,
+            "fn": 16,
+            "support": 42
           },
           "rent": {
             "precision": 1.0,
             "recall": 1.0,
             "f1": 1.0,
-            "tp": 48,
+            "tp": 32,
             "fp": 0,
             "fn": 0,
-            "support": 48
+            "support": 32
           },
           "shopping": {
             "precision": 1.0,
             "recall": 0.8724,
-            "f1": 0.9318,
-            "tp": 376,
+            "f1": 0.9319,
+            "tp": 253,
             "fp": 0,
-            "fn": 55,
-            "support": 431
+            "fn": 37,
+            "support": 290
           },
           "subscriptions": {
             "precision": 1.0,
             "recall": 1.0,
             "f1": 1.0,
-            "tp": 321,
+            "tp": 214,
             "fp": 0,
             "fn": 0,
-            "support": 321
+            "support": 214
           },
           "transfers": {
-            "precision": 0.8217,
-            "recall": 1.0,
-            "f1": 0.9021,
-            "tp": 212,
-            "fp": 46,
-            "fn": 0,
-            "support": 212
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 156,
+            "support": 156
           },
           "transport": {
             "precision": 1.0,
-            "recall": 0.9691,
-            "f1": 0.9843,
-            "tp": 941,
+            "recall": 0.9685,
+            "f1": 0.984,
+            "tp": 615,
             "fp": 0,
-            "fn": 30,
-            "support": 971
+            "fn": 20,
+            "support": 635
           },
           "travel": {
-            "precision": 0.6667,
+            "precision": 0.6538,
             "recall": 1.0,
-            "f1": 0.8,
-            "tp": 28,
-            "fp": 14,
+            "f1": 0.7907,
+            "tp": 17,
+            "fp": 9,
             "fn": 0,
-            "support": 28
+            "support": 17
           },
           "utilities": {
             "precision": 1.0,
             "recall": 1.0,
             "f1": 1.0,
-            "tp": 216,
+            "tp": 144,
             "fp": 0,
             "fn": 0,
-            "support": 216
+            "support": 144
           }
         },
         "top_confusions": [
           {
-            "true": "dining",
+            "true": "transfers",
             "pred": "other",
-            "count": 159
+            "count": 156
           },
           {
-            "true": "shopping",
+            "true": "dining",
             "pred": "other",
-            "count": 55
+            "count": 108
           },
           {
             "true": "groceries",
             "pred": "personal_care",
-            "count": 51
+            "count": 39
+          },
+          {
+            "true": "shopping",
+            "pred": "other",
+            "count": 37
           },
           {
             "true": "transport",
             "pred": "other",
-            "count": 30
+            "count": 20
           },
           {
             "true": "personal_care",
-            "pred": "transfers",
-            "count": 23
-          },
-          {
-            "true": "other",
-            "pred": "transfers",
-            "count": 23
-          },
-          {
-            "true": "education",
             "pred": "other",
-            "count": 17
+            "count": 16
           },
           {
             "true": "entertainment",
             "pred": "travel",
-            "count": 12
+            "count": 8
+          },
+          {
+            "true": "education",
+            "pred": "other",
+            "count": 8
           }
         ]
       }
     },
     "baseline_majority_class": {
       "predicts": "food_delivery",
-      "accuracy": 0.1998
+      "accuracy": 0.1962
     },
-    "long_tail_share": 0.2181,
+    "long_tail_share": 0.2232,
     "source_mix": {
-      "rule": 0.7819,
-      "keyword": 0.1675,
-      "fallback": 0.0506
+      "rule": 0.7768,
+      "keyword": 0.1217,
+      "fallback": 0.051,
+      "review": 0.0505
     }
   },
   "detectors": {
@@ -287,16 +287,16 @@
       "precision": 1.0,
       "recall": 0.973,
       "f1": 0.9863,
-      "tp": 108,
+      "tp": 72,
       "fp": 0,
-      "fn": 3
+      "fn": 2
     },
     "anomalies": {
-      "precision": 0.973,
+      "precision": 1.0,
       "recall": 1.0,
-      "f1": 0.9863,
-      "tp": 36,
-      "fp": 1,
+      "f1": 1.0,
+      "tp": 24,
+      "fp": 0,
       "fn": 0,
       "recall_by_type": {
         "fee": 1.0,
@@ -306,47 +306,49 @@
       }
     },
     "unused_membership_detection": {
-      "datasets": 3,
-      "exact_match": 3
+      "datasets": 2,
+      "exact_match": 2,
+      "basis": "Explicit user usage confirmation",
+      "unsupported_bank_only_claims": 0
     }
   },
   "forecast": {
     "origins": 42,
-    "seconds": 2.3,
+    "seconds": 2.4,
     "metric": "mean |predicted \u2212 actual net cash-flow| as % of monthly income",
     "horizons": {
       "30": {
-        "finpilot_p50": 28.9,
+        "finpilot_p50": 28.61,
         "naive_last_30d": 65.6,
         "mean_last_90d": 54.74,
-        "finpilot_p50_median": 14.71,
+        "finpilot_p50_median": 14.39,
         "naive_last_30d_median": 63.2,
-        "p10_p90_coverage": 0.667,
+        "p10_p90_coverage": 0.69,
         "n": 42
       },
       "60": {
-        "finpilot_p50": 41.57,
+        "finpilot_p50": 47.55,
         "naive_last_30d": 103.55,
         "mean_last_90d": 87.97,
-        "finpilot_p50_median": 19.24,
+        "finpilot_p50_median": 19.38,
         "naive_last_30d_median": 73.66,
-        "p10_p90_coverage": 0.722,
+        "p10_p90_coverage": 0.75,
         "n": 36
       },
       "90": {
-        "finpilot_p50": 53.11,
+        "finpilot_p50": 66.68,
         "naive_last_30d": 107.53,
         "mean_last_90d": 94.35,
-        "finpilot_p50_median": 28.45,
+        "finpilot_p50_median": 34.95,
         "naive_last_30d_median": 76.07,
-        "p10_p90_coverage": 0.633,
+        "p10_p90_coverage": 0.733,
         "n": 30
       }
     },
     "error_30d_by_persona": {
       "young_professional": 15.5,
-      "family": 13.5,
-      "freelancer": 57.7
+      "family": 13.6,
+      "freelancer": 56.7
     },
     "category_wape_30d": {
       "food_delivery": {
@@ -387,18 +389,27 @@
   },
   "chat": {
     "cases": 20,
-    "accuracy": 1.0,
-    "failures": [],
+    "accuracy": 0.95,
+    "failures": [
+      {
+        "question": "hello",
+        "expected": [
+          "get_overview"
+        ],
+        "got": [],
+        "ok": false
+      }
+    ],
     "mode": "deterministic intent router (LLM-free fallback)"
   },
   "jev": {
-    "model": "typesafe/jev-1.13",
+    "model": "jev-1.13.0",
     "baselines": {
       "merchants": {
         "cases": 142,
-        "rules_unsure": 52,
-        "rules_accuracy_all": 0.6831,
-        "rules_accuracy_unsure": 0.2692
+        "rules_unsure": 61,
+        "rules_accuracy_all": 0.6549,
+        "rules_accuracy_unsure": 0.2295
       },
       "chat": {
         "cases": 62,
@@ -430,31 +441,31 @@
     },
     "request_estimates": {
       "merchant_category": {
-        "estimated_input_tokens": 1004,
-        "jev_usd_per_1k_estimated": 0.0422,
-        "llm_usd_per_1k_estimated": 0.0396
+        "estimated_input_tokens": 1168,
+        "jev_usd_per_1k_estimated": 0.049,
+        "llm_usd_per_1k_estimated": 0.0406
       },
       "chat_route": {
-        "estimated_input_tokens": 1202,
-        "jev_usd_per_1k_estimated": 0.0505,
-        "llm_usd_per_1k_estimated": 0.6675
+        "estimated_input_tokens": 1267,
+        "jev_usd_per_1k_estimated": 0.0532,
+        "llm_usd_per_1k_estimated": 0.7788
       },
       "faithfulness": {
-        "estimated_input_tokens": 230,
-        "jev_usd_per_1k_estimated": 0.0097
+        "estimated_input_tokens": 239,
+        "jev_usd_per_1k_estimated": 0.0101
       },
       "goal_type": {
-        "estimated_input_tokens": 340,
-        "jev_usd_per_1k_estimated": 0.0143
+        "estimated_input_tokens": 372,
+        "jev_usd_per_1k_estimated": 0.0156
       },
       "csv_column": {
-        "estimated_input_tokens": 219,
-        "jev_usd_per_1k_estimated": 0.0092
+        "estimated_input_tokens": 210,
+        "jev_usd_per_1k_estimated": 0.0088
       }
     },
     "how_to_run": "MESH_API_KEY=\u2026 python -m evaluation.run_eval --jev   (records evaluation/cassettes/jev.json; afterwards --jev-replay reproduces every number offline)",
     "status": "pending \u2014 no Jev measurements in this run"
   },
   "llm_note": "Deterministic run: no LLM calls were made. Run `python -m evaluation.run_eval --llm` with MESH_API_KEY set to measure the LLM long-tail stage (row 4) on the same data.",
-  "runtime_seconds": 12.6
+  "runtime_seconds": 9.2
 }

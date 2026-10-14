@@ -38,8 +38,8 @@ AGENT_CARDS = [
     {
         "id": "categorizer",
         "name": "Categorizer",
-        "role": "Memory → merchant lexicon → keyword evidence → Jev decision per unknown merchant "
-        "(category, payee, service family) → recurring-pattern post-pass",
+        "role": "API reasoning separates payee business from transaction purpose; preserves user corrections, "
+        "reviews uncertain intermediary payments and records category evidence",
     },
     {
         "id": "analyzer",
@@ -51,19 +51,19 @@ AGENT_CARDS = [
         "id": "forecaster",
         "name": "Forecaster",
         "role": "Monte-Carlo cash-flow projection, goal probabilities (spend vs reserve goals typed "
-        "by Jev) and what-if simulation on common random numbers",
+        "through API reasoning) and what-if simulation on common random numbers",
     },
     {
         "id": "advisor",
         "name": "Advisor",
-        "role": "Ranks specific, quantified actions with trigger + evidence; LLM phrasing behind "
-        "a numeric grounding check and a Jev faithfulness check",
+        "role": "Reasons over patterns, obligations, forecasts and goals to prioritize evidenced actions; "
+        "numbers and claims are independently checked through the API",
     },
     {
         "id": "chat",
         "name": "Chat",
-        "role": "Jev routes each question; simple ones answered straight from tools, complex ones "
-        "escalated to the LLM tool loop",
+        "role": "API query planning selects exact financial tools; API generation explains verified "
+        "transaction facts, rankings, comparisons and simulations",
     },
     {"id": "digest", "name": "Digest", "role": "Scheduled weekly digest: one key insight + one action"},
 ]

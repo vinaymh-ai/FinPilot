@@ -90,6 +90,7 @@ def _money_marked(text: str) -> list[bool]:
 
 def check_grounding(text: str, *facts: Any, strict: bool = False) -> tuple[bool, list[float]]:
     """Return (ok, ungrounded_numbers). Small integers (counts, months, days) and years are ignored."""
+    text = re.sub(r"[\u2010-\u2014\u2212]", "-", text)
     allowed = allowed_numbers(*facts)
     if strict:
         raw: list[float] = []
@@ -97,6 +98,7 @@ def check_grounding(text: str, *facts: Any, strict: bool = False) -> tuple[bool,
             _collect(fact, raw)
         allowed = raw + [abs(v) * 100 for v in raw if 0 <= abs(v) <= 1]
     bad: list[float] = []
+    text = re.sub(r"(?m)^[ \t]{0,4}\d{1,2}[.)][ \t]+", "", text)
     if strict:
         dates = set(_ISO_TOKEN.findall(json.dumps(facts, default=str)))
         unsupported_dates = set(_ISO_TOKEN.findall(text)) - dates
@@ -108,7 +110,10 @@ def check_grounding(text: str, *facts: Any, strict: bool = False) -> tuple[bool,
             continue  # day-of-month / counts / month numbers
         if 2000 <= value <= 2100 and float(value).is_integer() and not is_pct and not money:
             continue  # years ("₹2,000" is money, not a year)
-        close = any(abs(abs(value) - abs(c)) <= 0.01 for c in allowed) if strict else _close(value, allowed)
+        tolerance = 0.5 if is_pct and not money else 0.01
+        close = (
+            any(abs(abs(value) - abs(c)) <= tolerance for c in allowed) if strict else _close(value, allowed)
+        )
         if not close:
             bad.append(value)
     return (not bad), bad

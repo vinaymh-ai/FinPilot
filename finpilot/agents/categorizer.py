@@ -110,7 +110,7 @@ class MerchantDecision:
 
 
 SYSTEM_PROMPT = """You are the Categorizer agent of FinPilot, a personal-finance co-pilot (default market: India, INR).
-You receive bank-statement merchants that our rule engine could not classify confidently.
+You receive full bank narrations and fallible rule suggestions. Independently reason about each transaction.
 Assign each one exactly ONE category id from this taxonomy:
 {taxonomy}
 
@@ -119,6 +119,10 @@ Guidelines:
 - In India "HOTEL <name>" with a small amount is usually a restaurant (dining); with a large amount it is lodging (travel).
 - A name alone does not prove a transfer: individuals can be landlords, shops or service providers.
 - Separate the payment channel (UPI, bank, payment platform) from the economic purpose.
+- First identify the payee's actual business and products, then infer this payment's purpose.
+  Words like Club, Tech and Services inside a company name do not prove membership fees or purchases.
+  Do not invent a fee/product from the payee's name. A bill-payment business's ordinary debit may be a
+  repayment inference without literal card wording; contrary rent/order/membership evidence wins.
 - Infer purpose using the complete narration, the payee's known business/products, direction,
   amount and related transactions. A bill-paying platform can indicate a credit-card repayment
   even when the bank's truncated narration omits the words "credit card". Explain the evidence
@@ -419,10 +423,17 @@ class CategorizerAgent(BaseAgent):
         stats: CategorizerStats,
         only: set[tuple[str, bool]] | None = None,
     ) -> None:
-        groups = self._uncertain_groups(items, results, only)
+        groups_by_narration: dict[tuple[str, bool], list[CatItem]] = defaultdict(list)
+        for item in items:
+            if results[item.key].source == "memory":
+                continue
+            key = (item.description, item.amount > 0)
+            if only is None or self._group_key(item, results[item.key]) in only:
+                groups_by_narration[key].append(item)
+        groups = list(groups_by_narration.items())
         if not groups or not self.llm_available:
             return
-        stats.llm_merchants = len(groups)
+        stats.llm_merchants += len(groups)
         for start in range(0, len(groups), self.batch_size):
             batch = groups[start : start + self.batch_size]
             payload = {
@@ -454,7 +465,9 @@ class CategorizerAgent(BaseAgent):
             rows = data.get("results", data) if isinstance(data, dict) else data
             for row in rows if isinstance(rows, list) else []:
                 try:
-                    idx = int(row.get("id"))
+                    if type(row.get("id")) is not int:
+                        continue
+                    idx = row["id"]
                     cat = str(row.get("category", "")).strip().lower()
                     conf = float(row.get("confidence", 0.6))
                 except (TypeError, ValueError, AttributeError):
@@ -473,7 +486,9 @@ class CategorizerAgent(BaseAgent):
                     cat, conf = "other", min(conf, LLM_THRESHOLD - 0.01)
                 for it in its:
                     prev = results[it.key]
-                    if conf >= prev.confidence or prev.confidence < LLM_THRESHOLD:
+                    if is_card_repayment(it.description) and cat != "credit_card_payment":
+                        continue  # explicit repayment evidence outranks a model's unsupported inference
+                    if conf >= LLM_THRESHOLD or prev.confidence < LLM_THRESHOLD:
                         results[it.key] = CatResult(
                             it.key, prev.merchant, cat, "llm", round(min(conf, 0.95), 2), f"LLM: {reason}"
                         )
@@ -526,6 +541,23 @@ class CategorizerAgent(BaseAgent):
         # Jev handles any remaining uncertainty; an optional cascade can retry those
         # decisions, but cannot switch off the initial reasoning stage.
         self._llm_refine(items, results, stats)
+        unresolved = [
+            it
+            for it in items
+            if results[it.key].source == "llm"
+            and results[it.key].category == "other"
+            and payment_provider(it.description)
+        ]
+        if unresolved and self.llm_available:
+            original = self.system_prompt
+            self.system_prompt = (
+                original
+                + "\nSecond reasoning level: audit your uncertain intermediary classifications. Evaluate the payee's business separately from the payment purpose. A company name is not a paid product; reject invented membership fees. Consider ordinary bill-payment use when no contrary purpose is stated, label it as inference with calibrated uncertainty. Retain other if genuine ambiguity remains. Return the same JSON schema."
+            )
+            try:
+                self._llm_refine(unresolved, results, stats)
+            finally:
+                self.system_prompt = original
         if self.jev_available:
             deferred = self._jev_refine(items, results, stats)
             # Cascading low-confidence answers to an LLM is opt-in: in independent tests the fallback
