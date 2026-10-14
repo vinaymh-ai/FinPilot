@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     categorizer_escalate_to_llm: bool = False  # cascade low-confidence answers to the LLM (validate first)
     chat_fast_model: str | None = None  # LLM for simple escalated questions (Jev complexity score)
     # Dense embeddings for chat retrieval (optional). Any OpenAI-compatible /embeddings model, e.g.
-    # "openai/text-embedding-3-small" on Mesh, "text-embedding-3-small" on OpenAI, "text-embedding-004" on
+    # "openai/text-embedding-3-small" on Mesh, "text-embedding-3-small" on OpenAI, "gemini-embedding-001" on
     # Gemini, "nomic-embed-text" on Ollama. EMBEDDING_PROVIDER picks the gateway (default: LLM_PROVIDER) —
     # needed when the chat provider serves no embeddings (FreeLLMAPI). Unset model → local retrieval only.
     embedding_model: str | None = None
