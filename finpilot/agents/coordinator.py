@@ -43,6 +43,7 @@ from finpilot.db import new_session
 from finpilot.decisions.jev import JevClient, get_jev
 from finpilot.domain.normalize import is_card_repayment, looks_like_person, payment_provider
 from finpilot.domain.recurring import detect_recurring
+from finpilot.domain.taxonomy import BY_ID
 from finpilot.llm.client import LLMRouter, get_router, run_context, step_call_log
 from finpilot.models import AgentRun, AgentStep, Digest, Forecast, Insight, Recommendation, Transaction
 from finpilot.observability.context import user_id_var
@@ -276,7 +277,9 @@ class Coordinator:
     # ------------------------------------------------------------------ nodes
     @staticmethod
     def _needs_classification(t: Transaction) -> bool:
-        if t.category_source in {"user", "import"}:
+        if t.category is not None and t.category not in BY_ID:
+            return True  # its custom category was deleted
+        if t.category_source in {"user", "import", "user_rule"}:
             return False
         if t.category is None:
             return True
@@ -296,6 +299,7 @@ class Coordinator:
 
     def _plan(self, session: Session, state: PipelineState):
         uid = state["user_id"]
+        repo.custom_categories(session, uid)  # refresh this user's own categories
         rows = repo.load_transactions(session, uid)
         n = len(rows)
         unc = sum(self._needs_classification(t) for t in rows)
@@ -377,14 +381,26 @@ class Coordinator:
             memory=repo.merchant_memory(session, uid),
             history={} if state.get("recategorize") else repo.merchant_history(session, uid),
             currency=user.currency,
+            rules=repo.user_rules(session, uid),
+            custom_categories=repo.custom_categories(session, uid),
+            conventions=repo.correction_conventions(session, uid),
         )
         items = [CatItem(t.id, t.description, float(t.amount), t.date) for t in targets]
         results, stats = agent.categorize(items)
         by_id = {t.id: t for t in targets}
         for r in results:
             t = by_id[r.key]
-            t.merchant, t.category, t.category_source = r.merchant, r.category, r.source
-            t.category_confidence, t.category_reason = r.confidence, r.reason
+            t.merchant = r.merchant
+            repo.set_category(
+                session,
+                t,
+                r.category,
+                source=r.source,
+                confidence=r.confidence,
+                reason=r.reason,
+                actor="categorizer",
+                run_id=state.get("run_id"),
+            )
         repo.save_merchant_profiles(session, uid, agent.profiles)
         session.commit()
         st = stats.as_dict()

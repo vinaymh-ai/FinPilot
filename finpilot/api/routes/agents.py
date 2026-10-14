@@ -8,17 +8,18 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import case, func, select
+from sqlalchemy import case, delete, func, or_, select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from finpilot.agents.chat import ChatAgent
 from finpilot.agents.coordinator import Coordinator
+from finpilot.agents.memory import memory_rows, title_from_question
 from finpilot.api import serializers as ser
 from finpilot.api.deps import current_user_id, get_db, require_admin
 from finpilot.llm.client import run_context, step_call_log
-from finpilot.models import AgentRun, AgentStep, ChatMessage, Digest, LLMCall
-from finpilot.schemas import ChatRequest, RunRequest, SchedulerUpdate
+from finpilot.models import AgentRun, AgentStep, ChatMessage, ChatSession, Digest, LLMCall, UserMemory
+from finpilot.schemas import ChatRequest, ChatSessionUpdate, RunRequest, SchedulerUpdate
 from finpilot.services import repository as repo
 from finpilot.services.scheduler import scheduler
 from finpilot.services.toolkit import FinanceToolkit
@@ -81,17 +82,65 @@ async def start_run(body: RunRequest, uid: int = Depends(current_user_id)) -> di
         raise HTTPException(409, str(exc)) from exc
 
 
+def _session(db: Session, uid: int, session_id: str) -> ChatSession | None:
+    return db.scalar(
+        select(ChatSession).where(ChatSession.user_id == uid, ChatSession.session_id == session_id)
+    )
+
+
+def _session_dict(cs: ChatSession) -> dict[str, Any]:
+    return {
+        "id": cs.session_id,
+        "title": cs.title,
+        "title_source": cs.title_source,
+        "pinned": bool(cs.pinned),
+        "message_count": cs.message_count or 0,
+        "created_at": cs.created_at.isoformat() if cs.created_at else None,
+        "updated_at": cs.updated_at.isoformat() if cs.updated_at else None,
+    }
+
+
+def _message_dict(m: ChatMessage) -> dict[str, Any]:
+    meta = m.meta or {}
+    return {
+        "id": m.id,
+        "role": m.role,
+        "content": m.content,
+        "trace": m.trace or [],
+        "route": m.route,
+        "artifacts": m.artifacts or [],
+        "model": meta.get("model"),
+        "pipeline": meta.get("pipeline") or [],
+        "guard": meta.get("guard"),
+        "memory": meta.get("memory"),
+        "created_at": m.created_at.isoformat() if m.created_at else None,
+    }
+
+
 @router.post("/chat")
 def chat(
     body: ChatRequest, uid: int = Depends(current_user_id), db: Session = Depends(get_db)
 ) -> dict[str, Any]:
+    session_id = body.session_id or uuid.uuid4().hex[:16]
+    cs = _session(db, uid, session_id)
+    if cs is None:
+        cs = ChatSession(
+            session_id=session_id,
+            user_id=uid,
+            title=title_from_question(body.message),
+            title_source="auto",
+            message_count=0,
+        )
+        db.add(cs)
+        db.flush()
+    # Working memory: the last turns of THIS conversation, with what each answer was about.
     history = [
-        {"role": m.role, "content": m.content}
+        {"role": m.role, "content": m.content, "meta": m.meta or {}}
         for m in db.scalars(
             select(ChatMessage)
-            .where(ChatMessage.user_id == uid, ChatMessage.session_id == body.session_id)
+            .where(ChatMessage.user_id == uid, ChatMessage.session_id == session_id)
             .order_by(ChatMessage.id.desc())
-            .limit(8)
+            .limit(24)
         )
     ][::-1]
     kit = FinanceToolkit(db, uid)
@@ -105,18 +154,21 @@ def chat(
             result = ChatAgent().answer(kit, body.message, history)
             run.status = "succeeded"
         except Exception as exc:  # noqa: BLE001
+            db.rollback()
             run.status, run.error = "failed", str(exc)
             result = {"answer": "Sorry — something went wrong answering that.", "trace": [], "model": "error"}
     route = result.get("route")
     run.finished_at = dt.datetime.now(dt.UTC)
     artifacts = result.get("artifacts") or []
     pipeline = result.get("pipeline") or []
+    memory = result.get("memory")
     run.summary = {
         "question": body.message[:200],
         "tools": [t["tool"] for t in result["trace"]],
         "model": result["model"],
         "pipeline": pipeline,
         "route": route and {k: route[k] for k in ("intent", "confidence", "action")},
+        "memory": memory and {k: memory.get(k) for k in ("kind", "payees", "notes")},
     }
     llm_calls = [c for c in calls if c.get("kind") != "jev"]
     how = f"via {' → '.join(pipeline) or 'rules'} ({result['model']})"
@@ -140,6 +192,7 @@ def chat(
                 "guard": result.get("guard"),
                 "planner": result.get("planner"),
                 "analyst": result.get("analyst"),
+                "memory": memory,
                 "pipeline": pipeline,
                 "llm_calls": llm_calls or None,
                 "jev_calls": [c for c in calls if c.get("kind") == "jev"] or None,
@@ -148,17 +201,19 @@ def chat(
             error=run.error,
         )
     )
-    db.add(ChatMessage(user_id=uid, session_id=body.session_id, role="user", content=body.message))
+    db.add(ChatMessage(user_id=uid, session_id=session_id, role="user", content=body.message))
     meta = {
         "model": result["model"],
         "pipeline": pipeline,
         "guard": result.get("guard"),
         "analyst": result.get("analyst"),
         "planner": result.get("planner"),
+        "memory": memory,
+        "context": result.get("context"),
     }
     msg = ChatMessage(
         user_id=uid,
-        session_id=body.session_id,
+        session_id=session_id,
         role="assistant",
         content=result["answer"],
         trace=result["trace"],
@@ -167,6 +222,9 @@ def chat(
         meta=meta,
     )
     db.add(msg)
+    cs = _session(db, uid, session_id) or cs
+    cs.message_count = (cs.message_count or 0) + 2
+    cs.updated_at = dt.datetime.now(dt.UTC)
     db.commit()
     return {
         "id": msg.id,
@@ -177,11 +235,81 @@ def chat(
         "planner": result.get("planner"),
         "analyst": result.get("analyst"),
         "guard": result.get("guard"),
+        "memory": memory,
         "pipeline": pipeline,
         "artifacts": artifacts,
         "run_id": run.id,
-        "session_id": body.session_id,
+        "session_id": session_id,
+        "session": _session_dict(cs),
     }
+
+
+@router.get("/chat/sessions")
+def list_chat_sessions(
+    q: str | None = None,
+    limit: int = 100,
+    uid: int = Depends(current_user_id),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Conversations, most recent first (pinned on top). `q` searches titles and messages."""
+    stmt = select(ChatSession).where(ChatSession.user_id == uid)
+    if q and q.strip():
+        like = f"%{q.strip()[:80]}%"
+        matching = select(ChatMessage.session_id).where(
+            ChatMessage.user_id == uid, ChatMessage.content.ilike(like)
+        )
+        stmt = stmt.where(or_(ChatSession.title.ilike(like), ChatSession.session_id.in_(matching)))
+    rows = db.scalars(
+        stmt.order_by(ChatSession.pinned.desc(), ChatSession.updated_at.desc(), ChatSession.id.desc()).limit(
+            min(max(limit, 1), 500)
+        )
+    )
+    return {"sessions": [_session_dict(cs) for cs in rows]}
+
+
+@router.patch("/chat/sessions/{session_id}")
+def update_chat_session(
+    session_id: str,
+    body: ChatSessionUpdate,
+    uid: int = Depends(current_user_id),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    cs = _session(db, uid, session_id)
+    if cs is None:
+        raise HTTPException(404, "conversation not found")
+    if body.title is not None:
+        cs.title, cs.title_source = body.title.strip(), "user"
+    if body.pinned is not None:
+        cs.pinned = body.pinned
+    db.commit()
+    return {"session": _session_dict(cs)}
+
+
+@router.delete("/chat/sessions/{session_id}", status_code=204)
+def delete_chat_session(
+    session_id: str, uid: int = Depends(current_user_id), db: Session = Depends(get_db)
+) -> None:
+    db.execute(delete(ChatMessage).where(ChatMessage.user_id == uid, ChatMessage.session_id == session_id))
+    db.execute(delete(ChatSession).where(ChatSession.user_id == uid, ChatSession.session_id == session_id))
+    db.commit()
+
+
+@router.get("/chat/memory")
+def list_memories(uid: int = Depends(current_user_id), db: Session = Depends(get_db)) -> dict[str, Any]:
+    """What the chat remembers about this user across conversations."""
+    return {"memories": memory_rows(db, uid)}
+
+
+@router.delete("/chat/memory/{memory_id}", status_code=204)
+def delete_memory(memory_id: int, uid: int = Depends(current_user_id), db: Session = Depends(get_db)) -> None:
+    db.execute(delete(UserMemory).where(UserMemory.user_id == uid, UserMemory.id == memory_id))
+    db.commit()
+
+
+@router.delete("/chat/memory", status_code=204)
+def clear_memories(uid: int = Depends(current_user_id), db: Session = Depends(get_db)) -> None:
+    db.execute(delete(UserMemory).where(UserMemory.user_id == uid))
+    db.commit()
 
 
 @router.get("/chat/{session_id}")
@@ -192,33 +320,22 @@ def chat_history(
         select(ChatMessage)
         .where(ChatMessage.user_id == uid, ChatMessage.session_id == session_id)
         .order_by(ChatMessage.id)
-        .limit(200)
+        .limit(500)
     )
+    cs = _session(db, uid, session_id)
     return {
-        "messages": [
-            {
-                "id": m.id,
-                "role": m.role,
-                "content": m.content,
-                "trace": m.trace or [],
-                "route": m.route,
-                "artifacts": m.artifacts or [],
-                "model": (m.meta or {}).get("model"),
-                "pipeline": (m.meta or {}).get("pipeline") or [],
-                "guard": (m.meta or {}).get("guard"),
-                "created_at": m.created_at.isoformat() if m.created_at else None,
-            }
-            for m in rows
-        ]
+        "session": _session_dict(cs) if cs else None,
+        "messages": [_message_dict(m) for m in rows],
     }
 
 
 @router.delete("/chat/{session_id}", status_code=204)
 def clear_chat(session_id: str, uid: int = Depends(current_user_id), db: Session = Depends(get_db)) -> None:
-    for m in db.scalars(
-        select(ChatMessage).where(ChatMessage.user_id == uid, ChatMessage.session_id == session_id)
-    ):
-        db.delete(m)
+    """Clear a conversation's messages (the thread itself stays; delete it via /chat/sessions)."""
+    db.execute(delete(ChatMessage).where(ChatMessage.user_id == uid, ChatMessage.session_id == session_id))
+    cs = _session(db, uid, session_id)
+    if cs is not None:
+        cs.message_count = 0
     db.commit()
 
 

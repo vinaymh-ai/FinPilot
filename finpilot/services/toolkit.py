@@ -97,6 +97,7 @@ class FinanceToolkit:
         self.user_id = user_id
         self.user = repo.get_or_create_user(session, user_id)
         self.currency = self.user.currency or get_settings().currency
+        self.custom_categories = repo.custom_categories(session, user_id)
 
     # ------------------------------------------------------------------ cached data
     @cached_property
@@ -628,6 +629,41 @@ class FinanceToolkit:
         }
 
     # ------------------------------------------------------------------ dispatch
+    def find_payees(self, description: str, limit: int = 8) -> dict[str, Any]:
+        """Semantic search over payees by meaning or approximate name ("coffee places", "hanumantha")."""
+        from finpilot.services.retrieval import LedgerRetriever
+
+        if not isinstance(description, str) or not description.strip():
+            raise ValueError("description must be a non-empty string")
+        retriever = LedgerRetriever(self)
+        k = max(1, min(int(limit or 8), 15))
+        hits = retriever.semantic_search(description[:200], k=k)
+        names = [m["merchant"] for m in retriever.match_merchants(description, k=k, min_score=0.84)]
+        by_name = {h["merchant"]: h for h in hits}
+        hits = [
+            *(by_name.get(n) or {"merchant": n, "score": 1.0, "retrieval": "name match"} for n in names),
+            *(h for h in hits if h["merchant"] not in names),
+        ]  # exact / spelling matches first
+        out = []
+        for h in hits[:k]:
+            m = retriever.merchants[h["merchant"]]
+            out.append(
+                {
+                    "merchant": h["merchant"],
+                    "about": h.get("about"),
+                    "category": label(
+                        h.get("category") or (m.categories.most_common(1)[0][0] if m.categories else None)
+                    ),
+                    "transactions": m.count,
+                    "debits": round(m.debit_total, 2),
+                    "credits": round(m.credit_total, 2),
+                    "spellings": retriever.variants(h["merchant"]),
+                    "score": h.get("score"),
+                }
+            )
+        mode = hits[0]["retrieval"] if hits else "none"
+        return {"query": description, "payees": out, "retrieval": mode}
+
     def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         fn = getattr(self, name, None)
         if name not in TOOL_NAMES or fn is None:
@@ -725,6 +761,14 @@ TOOL_SPECS: list[dict[str, Any]] = [
             }
         },
         ["question"],
+    ),
+    _tool(
+        "find_payees",
+        "Semantic search over the user's payees by meaning or approximate spelling ('coffee places', 'my gym', "
+        "'medicines', 'hanumantha'). Returns matching payees with totals and their other spellings; follow up "
+        "with query_ledger or get_spending using an exact payee name.",
+        {"description": {"type": "string"}, "limit": {"type": "integer"}},
+        ["description"],
     ),
     _tool(
         "rank_spending",

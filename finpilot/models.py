@@ -394,6 +394,104 @@ class ChatMessage(TimestampMixin, Base):
     meta: Mapped[dict[str, Any] | None] = mapped_column(JSON)  # model, agent pipeline, analyst/planner info
 
 
+class ChatSession(Base):
+    """One conversation thread ("New chat"). Messages keep the same `session_id`."""
+
+    __tablename__ = "chat_sessions"
+    __table_args__ = (
+        UniqueConstraint("user_id", "session_id", name="uq_chat_session"),
+        Index("ix_chat_session_user_updated", "user_id", "updated_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(64))  # the key chat messages carry
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(120), default="New chat")
+    title_source: Mapped[str | None] = mapped_column(String(8))  # auto | llm | user
+    pinned: Mapped[bool | None] = mapped_column(Boolean, default=False)
+    message_count: Mapped[int | None] = mapped_column(Integer, default=0)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class UserMemory(TimestampMixin, Base):
+    """Long-term chat memory: what the user told FinPilot about themselves and their payees.
+
+    kinds: alias (several payee spellings are one person), relationship ("Hanumanthaiah is my
+    landlord"), preference ("call me Vinay"), note (anything the user asked to remember).
+    """
+
+    __tablename__ = "user_memories"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(16))
+    subject: Mapped[str] = mapped_column(String(120))  # who/what it is about ("landlord", "hanumantha")
+    content: Mapped[str] = mapped_column(String(500))  # human-readable statement shown in Settings
+    data: Mapped[dict[str, Any] | None] = mapped_column(JSON)  # payees, role, category, …
+    source_session: Mapped[str | None] = mapped_column(String(64))
+    last_used_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CustomCategory(TimestampMixin, Base):
+    """A category the user created. `parent` is the built-in category it behaves like."""
+
+    __tablename__ = "custom_categories"
+
+    id: Mapped[str] = mapped_column(String(48), primary_key=True)  # u<user>_<slug>
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    label: Mapped[str] = mapped_column(String(60))
+    parent: Mapped[str] = mapped_column(String(48))
+    color: Mapped[str | None] = mapped_column(String(16))
+    icon: Mapped[str | None] = mapped_column(String(32))
+    description: Mapped[str | None] = mapped_column(String(255))
+
+
+class CategoryRule(TimestampMixin, Base):
+    """A user's own categorization rule: "narration contains MAID → Household help".
+
+    Rules run before every other categorizer stage, apply to existing transactions when created and
+    to every future import.
+    """
+
+    __tablename__ = "category_rules"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    field: Mapped[str] = mapped_column(String(16), default="any")  # any | merchant | description
+    match: Mapped[str] = mapped_column(
+        String(16), default="contains"
+    )  # contains | equals | starts_with | word
+    terms: Mapped[list[str]] = mapped_column(JSON)  # any of these
+    direction: Mapped[str | None] = mapped_column(String(8))  # debit | credit | None (both)
+    min_amount: Mapped[float | None] = mapped_column(Float)
+    max_amount: Mapped[float | None] = mapped_column(Float)
+    channel: Mapped[str | None] = mapped_column(String(16))
+    category: Mapped[str] = mapped_column(String(48))
+    priority: Mapped[int | None] = mapped_column(Integer, default=100)  # lower runs first
+    enabled: Mapped[bool | None] = mapped_column(Boolean, default=True)
+    source: Mapped[str | None] = mapped_column(String(16))  # user | correction | chat
+    hits: Mapped[int | None] = mapped_column(Integer, default=0)
+
+
+class CategoryEvent(Base):
+    """Audit trail: every change to a transaction's category, by whom and why."""
+
+    __tablename__ = "category_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    transaction_id: Mapped[int] = mapped_column(ForeignKey("transactions.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("agent_runs.id", ondelete="SET NULL"))
+    actor: Mapped[str] = mapped_column(String(16))  # categorizer | user | rule | chat | review
+    old_category: Mapped[str | None] = mapped_column(String(48))
+    new_category: Mapped[str | None] = mapped_column(String(48))
+    source: Mapped[str | None] = mapped_column(String(24))
+    confidence: Mapped[float | None] = mapped_column(Float)
+    reason: Mapped[str | None] = mapped_column(String(512))
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class AppSetting(Base):
     __tablename__ = "app_settings"
 

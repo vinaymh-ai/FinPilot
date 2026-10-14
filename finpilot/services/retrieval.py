@@ -12,8 +12,15 @@ landlord" is "Ramesh Kumar" (category rent). This module retrieves, for one ques
 * **knowledge snippets** — latest insights, recommendations, subscriptions, goals — ranked with BM25,
   so explanatory questions are answered from what the other agents already established.
 
-Everything runs locally and deterministically (no embedding API), so retrieval works in zero-cost
-mode and is reproducible in tests.
+* **semantic matches** — `finpilot.services.semantic`: hybrid sparse vectors (words, character
+  n-grams, category meaning, merchant enrichment) with optional dense embeddings fused by RRF, so
+  "coffee" finds Starbucks and "medicines" finds Apollo;
+* **memory** — payee aliases and relationships the user taught the chat ("Hanumanthaiah is my
+  landlord", "both spellings are the same person").
+
+Spelling variants of one payee ("HANUMANTHAIAH" / "HANUMANTHIAH") are always returned together.
+The default path runs locally and deterministically, so retrieval works in zero-cost mode and is
+reproducible in tests.
 """
 
 from __future__ import annotations
@@ -23,6 +30,7 @@ import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
+from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
 from finpilot.domain.lexicon import KEYWORDS
@@ -238,7 +246,7 @@ CATEGORY_WORDS: dict[str, list[str]] = {
 class LedgerRetriever:
     """Value linking (merchants, categories) and knowledge retrieval for one user's question."""
 
-    def __init__(self, kit: FinanceToolkit):
+    def __init__(self, kit: FinanceToolkit, memories: list[dict[str, Any]] | None = None):
         self.kit = kit
         stats: dict[str, MerchantStats] = {}
         descs: dict[str, list[str]] = defaultdict(list)
@@ -263,7 +271,96 @@ class LedgerRetriever:
             self.vocabulary |= set(normalize_text(t.merchant + " " + t.description).split())
         self._names = list(stats)
         self._name_norm = {n: normalize_text(n) for n in self._names}
+        self._descs = descs
         self._bm25 = BM25([tokens(n + " " + " ".join(descs[n])) for n in self._names])
+        # Long-term memory: words that name payees ("landlord", "hanumantha") → payees.
+        self.memory_terms: dict[str, tuple[list[str], str]] = {}
+        for mem in memories or []:
+            payees = [p for p in mem.get("payees") or [] if p in stats]
+            if not payees:
+                continue
+            for term in mem.get("terms") or []:
+                norm = normalize_text(term)
+                if norm and len(norm) >= 3:
+                    self.memory_terms[norm] = (payees, mem.get("content") or "")
+
+    # ------------------------------------------------------------------ name variants
+    @cached_property
+    def clusters(self) -> dict[str, list[str]]:
+        """Each payee → every spelling of it in the data (itself included)."""
+        from finpilot.services.semantic import are_variants, name_key
+
+        by_key: dict[tuple[str, ...], list[str]] = defaultdict(list)
+        for n in self._names:
+            by_key[name_key(n)].append(n)
+        out: dict[str, list[str]] = {}
+        for group in by_key.values():
+            for n in group:
+                out[n] = [m for m in group if are_variants(n, m)]
+        return out
+
+    def variants(self, name: str) -> list[str]:
+        return self.clusters.get(name, [name])
+
+    @cached_property
+    def semantic(self):
+        from finpilot.services.semantic import SemanticIndex
+
+        router = getattr(self.kit, "router", None)
+        return SemanticIndex(self.merchants, self._descs, router=router)
+
+    @cached_property
+    def _described(self) -> dict[str, set[str]]:
+        """Descriptor words per payee: its brand's enrichment, or — for an unknown local business —
+        the enrichment of the kind of business its own name says it is ("SRI DURGA FUELS" → fuel)."""
+        from finpilot.domain.enrichment import BRAND_TAGS, describe, rule_category, word_forms
+
+        by_word: dict[str, list[str]] = defaultdict(list)
+        for rule_name, tags in BRAND_TAGS.items():
+            for w in normalize_text(tags).split():
+                by_word[w].append(rule_name)
+        out: dict[str, set[str]] = {}
+        for name in self._names:
+            tags = describe(name, " ".join(self._descs.get(name, [])[:1]))
+            if not tags:
+                cat = self.merchants[name].categories.most_common(1)
+                top = cat[0][0] if cat else None
+                for word in normalize_text(name).split():
+                    for form in word_forms(word):
+                        for rule_name in by_word.get(form, []):
+                            if rule_category(rule_name) == top:
+                                tags += " " + BRAND_TAGS[rule_name]
+            words: set[str] = set()
+            for w in normalize_text(tags).split():
+                words |= word_forms(w)
+            out[name] = words
+        return out
+
+    def described_by(self, word: str) -> list[str]:
+        """Merchants whose enrichment describes them with `word` ("pizza" → Domino's)."""
+        from finpilot.domain.enrichment import word_forms
+
+        w = normalize_text(word)
+        if len(w) < 3 or w in STOPWORDS:
+            return []
+        forms = word_forms(w)
+        hits = [n for n, tags in self._described.items() if forms & tags]
+        return sorted(hits, key=lambda n: -self.merchants[n].count)
+
+    def semantic_search(self, query: str, k: int = 8) -> list[dict[str, Any]]:
+        cats = [c["category"] for c in self.match_categories(query) if c["score"] >= 0.6]
+        return self.semantic.search(query, categories=cats, k=k)
+
+    def memory_matches(self, question: str) -> list[tuple[str, list[str], str]]:
+        """(term, payees, memory text) for every remembered term the question uses."""
+        q = normalize_text(question)
+        out = []
+        for term, (payees, content) in sorted(self.memory_terms.items(), key=lambda kv: -len(kv[0])):
+            if re.search(rf"(?<![A-Z0-9]){re.escape(term)}(?![A-Z0-9])", q) and not any(
+                term in o[0] for o in out
+            ):
+                out.append((term, payees, content))
+        return out
 
     # ------------------------------------------------------------------ merchants
     def match_merchants(self, question: str, k: int = 6, min_score: float = 0.55) -> list[dict[str, Any]]:
@@ -282,8 +379,16 @@ class LedgerRetriever:
             elif words and all(re.search(rf"(?<![A-Z0-9]){re.escape(w)}(?![A-Z0-9])", q_norm) for w in words):
                 score, why = 0.95, "all name words"
             else:
+                from finpilot.services.semantic import word_variant
+
                 hits = [
-                    w for w in words if len(w) >= 4 and re.search(rf"(?<![A-Z0-9]){re.escape(w)}", q_norm)
+                    w
+                    for w in words
+                    if len(w) >= 4
+                    and (
+                        re.search(rf"(?<![A-Z0-9]){re.escape(w)}", q_norm)
+                        or any(len(t) >= 5 and word_variant(t, w) for t in q_tokens)
+                    )
                 ]
                 if hits:
                     score, why = 0.6 + 0.3 * len(hits) / len(words), "name word " + ", ".join(hits)
@@ -297,8 +402,18 @@ class LedgerRetriever:
                     score, why = 0.5 * bm[i] / top_bm, "narration text"
             if score >= min_score:
                 scored.append((score, name, why))
-        scored.sort(key=lambda x: (-x[0], -self.merchants[x[1]].count))
-        return [self.merchants[n].to_dict(s, why) for s, n, why in scored[:k]]
+        for term, payees, content in self.memory_matches(question):
+            for name in payees:
+                scored.append((1.0, name, f"memory: {content or term.lower()}"))
+        # every spelling of a matched payee comes along with the same score
+        best: dict[str, tuple[float, str]] = {}
+        for score, name, why in scored:
+            for v in self.variants(name):
+                reason = why if v == name else f"spelling variant of {name}"
+                if score > best.get(v, (0.0, ""))[0]:
+                    best[v] = (score, reason)
+        ranked = sorted(best.items(), key=lambda kv: (-kv[1][0], -self.merchants[kv[0]].count))
+        return [self.merchants[n].to_dict(s, why) for n, (s, why) in ranked[:k]]
 
     # ------------------------------------------------------------------ categories
     def match_categories(self, question: str) -> list[dict[str, Any]]:
@@ -371,5 +486,6 @@ class LedgerRetriever:
         return {
             "merchants": self.match_merchants(question),
             "categories": self.match_categories(question),
+            "semantic_matches": self.semantic_search(question, k=5),
             "knowledge": self.knowledge(question, k=4),
         }

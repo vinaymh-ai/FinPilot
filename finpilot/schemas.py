@@ -77,7 +77,53 @@ class RecommendationUpdate(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
-    session_id: str = Field(default="default", max_length=64)
+    # Omit (or send null) to start a new conversation; the response carries its id.
+    session_id: str | None = Field(default=None, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+class ChatSessionUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=120)
+    pinned: bool | None = None
+
+
+class CategoryCreate(BaseModel):
+    label: str = Field(min_length=1, max_length=60)
+    parent: str = Field(default="other", max_length=48)
+    color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    icon: str | None = Field(default=None, max_length=32, pattern=r"^[a-z0-9-]+$")
+    description: str | None = Field(default=None, max_length=255)
+    # optional quick rule: narration/payee words that should land in this category
+    keywords: list[str] = Field(default_factory=list, max_length=20)
+
+
+class CategoryUpdate(BaseModel):
+    label: str | None = Field(default=None, min_length=1, max_length=60)
+    parent: str | None = Field(default=None, max_length=48)
+    color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    icon: str | None = Field(default=None, max_length=32, pattern=r"^[a-z0-9-]+$")
+    description: str | None = Field(default=None, max_length=255)
+
+
+class RuleBody(BaseModel):
+    category: str = Field(max_length=48)
+    terms: list[str] = Field(min_length=1, max_length=20)
+    field: Literal["any", "merchant", "description"] = "any"
+    match: Literal["contains", "word", "equals", "starts_with"] = "contains"
+    direction: Literal["debit", "credit"] | None = None
+    min_amount: float | None = Field(default=None, ge=0)
+    max_amount: float | None = Field(default=None, ge=0)
+    channel: str | None = Field(default=None, max_length=16)
+    priority: int = Field(default=100, ge=0, le=1000)
+    enabled: bool = True
+    apply_to_existing: bool = True
+    include_manual: bool = False
+
+
+class BulkCategorize(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=2000)
+    category: str | None = Field(default=None, max_length=48)  # None + approve=True confirms current labels
+    approve: bool = False
+    remember: bool = False  # also learn merchant → category for future imports
 
 
 class RunRequest(BaseModel):

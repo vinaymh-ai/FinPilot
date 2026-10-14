@@ -1,6 +1,8 @@
 """Categorizer agent — labels every transaction with a category, a confidence and a reason.
 
 Cascade (cheapest, most certain first):
+    0. user_rule — the user's own rules ("narration contains MAID → Household help"), which can
+                  target built-in or custom categories
     1. memory   — the user's own past corrections for this merchant (learning from feedback)
     2. history  — how this merchant was categorised before (by Jev, the LLM or the user)
     3. rule     — curated merchant lexicon (≈200 Indian + global brands)
@@ -39,14 +41,15 @@ from finpilot.domain.normalize import (
     payment_provider,
 )
 from finpilot.domain.recurring import TxnLite, detect_recurring
-from finpilot.domain.taxonomy import BY_ID, CATEGORIES, CATEGORY_IDS
+from finpilot.domain.rules import UserRule, first_match
+from finpilot.domain.taxonomy import BY_ID, CATEGORIES, CATEGORY_IDS, Category
 
 CREDIT_CATEGORIES = {"income", "transfers", "investments"}
 LLM_THRESHOLD = 0.7
 P2P_CONFIDENCE = 0.6
 # Results the LLM does not re-check: the user's own corrections and imported labels, and earlier
 # model decisions remembered for the same merchant.
-SETTLED_SOURCES = {"memory", "history", "user", "import"}
+SETTLED_SOURCES = {"memory", "history", "user", "import", "user_rule"}
 
 
 @dataclass
@@ -149,6 +152,11 @@ Category rules:
   (say it is an inference). Card bills do not reveal the original purchases.
 - other: only when the business and purpose genuinely cannot be identified.
 
+The user's own conventions come first: `user_conventions` lists payees the user categorised themselves
+(corrections and rules). Follow them for the same payee and for clearly the same kind of payee. Category ids
+starting with "u<digits>_" are categories the user created; use one when its description fits better than a
+built-in category.
+
 Confidence calibration: 0.95 explicit in the narration or a famous single-purpose brand; 0.85 strong brand or
 keyword knowledge; 0.7 plausible inference; below 0.6 is a guess — answer "other" instead of guessing.
 Respond with JSON only: {{"results": [{{"id": <id>, "category": "<category id>", "confidence": <0..1>,
@@ -157,8 +165,14 @@ Respond with JSON only: {{"results": [{{"id": <id>, "category": "<category id>",
 Return one result for every input id."""
 
 
-def _taxonomy_text() -> str:
-    return "\n".join(f"- {c.id}: {c.label} — {c.description}" for c in CATEGORIES)
+def _taxonomy_text(custom: list[Category] | None = None) -> str:
+    lines = [f"- {c.id}: {c.label} — {c.description}" for c in CATEGORIES]
+    for c in custom or []:
+        parent = BY_ID[c.parent].label if c.parent in BY_ID else "Other"
+        lines.append(
+            f"- {c.id}: {c.label} — the user's own category ({c.description}; behaves like {parent})"
+        )
+    return "\n".join(lines)
 
 
 class CategorizerAgent(BaseAgent):
@@ -173,11 +187,20 @@ class CategorizerAgent(BaseAgent):
         history: dict[str, str] | None = None,
         batch_size: int = 12,
         currency: str = "INR",
+        rules: list[UserRule] | None = None,
+        custom_categories: list[Category] | None = None,
+        conventions: list[dict[str, str]] | None = None,
         **kwargs: Any,
     ):
         super().__init__(*args, **kwargs)
-        self.memory = {k.upper(): v for k, v in (memory or {}).items()}
-        self.history = {k.upper(): v for k, v in (history or {}).items()}
+        self.memory = {k.upper(): v for k, v in (memory or {}).items() if v in BY_ID}
+        self.history = {k.upper(): v for k, v in (history or {}).items() if v in BY_ID}
+        self.rules = [r for r in rules or [] if r.category in BY_ID]
+        self.custom = list(custom_categories or [])
+        self.allowed = set(CATEGORY_IDS) | {c.id for c in self.custom}
+        self.conventions = list(conventions or [])[:20]
+        if self.custom:
+            self.system_prompt = SYSTEM_PROMPT.format(taxonomy=_taxonomy_text(self.custom))
         self.batch_size = batch_size
         self.currency = currency
         self.profiles: list[MerchantDecision] = []  # filled by the Jev stage, persisted by the coordinator
@@ -187,6 +210,24 @@ class CategorizerAgent(BaseAgent):
         merchant, norm = merchant_key(item.description)
         mk = merchant.upper()
         provider = payment_provider(item.description)
+        if self.rules and (
+            hit := first_match(
+                self.rules,
+                description=item.description,
+                merchant=merchant,
+                amount=item.amount,
+                channel=detect_channel(item.description),
+            )
+        ):
+            rule, term = hit
+            return CatResult(
+                item.key,
+                merchant,
+                rule.category,
+                "user_rule",
+                0.99,
+                f"Your rule: {rule.describe(BY_ID[rule.category].label)} (matched “{term.lower()}”)",
+            )
         if mk in self.memory and not provider:
             return CatResult(
                 item.key,
@@ -501,6 +542,7 @@ class CategorizerAgent(BaseAgent):
             batch = groups[start : start + self.batch_size]
             payload = {
                 "currency": self.currency,
+                **({"user_conventions": self.conventions} if self.conventions else {}),
                 "merchants": [
                     {
                         "id": idx,
@@ -538,7 +580,7 @@ class CategorizerAgent(BaseAgent):
                 except (TypeError, ValueError, AttributeError):
                     continue
                 if (
-                    cat not in CATEGORY_IDS
+                    cat not in self.allowed
                     or not (start <= idx < start + len(batch))
                     or not math.isfinite(conf)
                     or not 0 <= conf <= 1
@@ -644,7 +686,7 @@ class CategorizerAgent(BaseAgent):
             if series.cadence not in ("monthly", "yearly") or series.typical_amount >= 0:
                 continue
             members = [results[k] for k in series.txn_ids if k in results]
-            if not members or any(m.source in ("memory", "rule", "history") for m in members):
+            if not members or any(m.source in ("memory", "rule", "history", "user_rule") for m in members):
                 continue
             if abs(series.typical_amount) > 5000 or all(m.category == "subscriptions" for m in members):
                 continue

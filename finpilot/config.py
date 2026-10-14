@@ -81,6 +81,9 @@ class Settings(BaseSettings):
     jev_order_check: bool = True  # re-ask mid-confidence answers with options reversed (order bias)
     categorizer_escalate_to_llm: bool = False  # cascade low-confidence answers to the LLM (validate first)
     chat_fast_model: str | None = None  # LLM for simple escalated questions (Jev complexity score)
+    # Dense embeddings for chat retrieval (optional). Any OpenAI-compatible /embeddings model on the
+    # primary provider, e.g. "text-embedding-3-small". Unset → local hybrid retrieval only.
+    embedding_model: str | None = None
     # Prices used only for cost reporting (USD per 1M tokens)
     jev_price_in_per_1m: float = 0.042
     llm_price_in_per_1m: float = 0.15
