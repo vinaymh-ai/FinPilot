@@ -21,10 +21,10 @@ function NarrationSection({ n }: { n: any }) {
           <thead className="text-left text-muted">
             <tr>
               <th className="py-1.5 font-medium">Measurement</th>
-              <th className="text-right font-medium">Category</th>
-              <th className="text-right font-medium">Channel</th>
-              <th className="text-right font-medium">Confident share</th>
-              <th className="text-right font-medium">Precision when confident</th>
+              <th className="pl-3 text-right font-medium">Category</th>
+              <th className="pl-3 text-right font-medium">Channel</th>
+              <th className="pl-3 text-right font-medium">Confident share</th>
+              <th className="pl-3 text-right font-medium">Precision when confident</th>
             </tr>
           </thead>
           <tbody>
@@ -71,7 +71,7 @@ function ChatQASection({ qa }: { qa: any }) {
       <div className="flex flex-wrap gap-1.5 px-5">
         {Object.entries(qa.by_agent).map(([k, v]: [string, any]) => (
           <Badge key={k} tone={v.accuracy === 1 ? "green" : "amber"}>
-            {titleCase(k)} {v.cases} · {pctv(v.accuracy)}
+            {k === "sql_analyst" ? "SQL Analyst" : titleCase(k)} {v.cases} · {pctv(v.accuracy)}
           </Badge>
         ))}
       </div>
