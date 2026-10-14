@@ -109,14 +109,17 @@ def chat(
             result = {"answer": "Sorry — something went wrong answering that.", "trace": [], "model": "error"}
     route = result.get("route")
     run.finished_at = dt.datetime.now(dt.UTC)
+    artifacts = result.get("artifacts") or []
+    pipeline = result.get("pipeline") or []
     run.summary = {
         "question": body.message[:200],
         "tools": [t["tool"] for t in result["trace"]],
         "model": result["model"],
+        "pipeline": pipeline,
         "route": route and {k: route[k] for k in ("intent", "confidence", "action")},
     }
     llm_calls = [c for c in calls if c.get("kind") != "jev"]
-    how = f"via {result['model']}"
+    how = f"via {' → '.join(pipeline) or 'rules'} ({result['model']})"
     if route:
         how = (
             f"routed by Jev as '{route['intent']}' ({route['confidence']:.2f}) → "
@@ -136,6 +139,8 @@ def chat(
                 "route": route,
                 "guard": result.get("guard"),
                 "planner": result.get("planner"),
+                "analyst": result.get("analyst"),
+                "pipeline": pipeline,
                 "llm_calls": llm_calls or None,
                 "jev_calls": [c for c in calls if c.get("kind") == "jev"] or None,
             },
@@ -144,6 +149,13 @@ def chat(
         )
     )
     db.add(ChatMessage(user_id=uid, session_id=body.session_id, role="user", content=body.message))
+    meta = {
+        "model": result["model"],
+        "pipeline": pipeline,
+        "guard": result.get("guard"),
+        "analyst": result.get("analyst"),
+        "planner": result.get("planner"),
+    }
     msg = ChatMessage(
         user_id=uid,
         session_id=body.session_id,
@@ -151,6 +163,8 @@ def chat(
         content=result["answer"],
         trace=result["trace"],
         route=route,
+        artifacts=artifacts or None,
+        meta=meta,
     )
     db.add(msg)
     db.commit()
@@ -161,6 +175,10 @@ def chat(
         "model": result["model"],
         "route": route,
         "planner": result.get("planner"),
+        "analyst": result.get("analyst"),
+        "guard": result.get("guard"),
+        "pipeline": pipeline,
+        "artifacts": artifacts,
         "run_id": run.id,
         "session_id": body.session_id,
     }
@@ -184,6 +202,10 @@ def chat_history(
                 "content": m.content,
                 "trace": m.trace or [],
                 "route": m.route,
+                "artifacts": m.artifacts or [],
+                "model": (m.meta or {}).get("model"),
+                "pipeline": (m.meta or {}).get("pipeline") or [],
+                "guard": (m.meta or {}).get("guard"),
                 "created_at": m.created_at.isoformat() if m.created_at else None,
             }
             for m in rows

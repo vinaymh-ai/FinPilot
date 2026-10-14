@@ -69,7 +69,7 @@ def test_unknown_balance_still_runs_forecast_advisor_and_produces_auditable_advi
     db.commit()
     result = Coordinator(use_llm=False).run_pipeline()
     assert result["status"] == "succeeded", result
-    assert result["summary"]["plan"] == ["analyze", "forecast", "advise"]
+    assert result["summary"]["plan"] == ["analyze", "forecast", "advise", "audit"]
     db.expire_all()
     forecast = repo.latest_forecast(db, 1).payload
     assert forecast["projection_type"] == "cashflow_change"

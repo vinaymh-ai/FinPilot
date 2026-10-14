@@ -36,7 +36,8 @@ def list_transactions(
     recurring: bool = False,
     impulse: bool = False,
     review: bool = False,
-    direction: str | None = Query(default=None, pattern="^(in|out)$"),
+    direction: str | None = Query(default=None, pattern="^(in|out|credit|debit)$"),
+    channel: str | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=500),
     uid: int = Depends(current_user_id),
@@ -67,10 +68,12 @@ def list_transactions(
         stmt = stmt.where(Transaction.is_anomaly.is_(True))
     if recurring:
         stmt = stmt.where(Transaction.is_recurring.is_(True))
-    if direction == "in":
+    if direction in ("in", "credit"):
         stmt = stmt.where(Transaction.amount > 0)
-    elif direction == "out":
-        stmt = stmt.where(Transaction.amount < 0)
+    elif direction in ("out", "debit"):
+        stmt = stmt.where(Transaction.amount <= 0)
+    if channel:
+        stmt = stmt.where(Transaction.channel == channel)
     rows = list(
         db.scalars(stmt.order_by(Transaction.date.desc(), Transaction.time.desc(), Transaction.id.desc()))
     )
@@ -89,6 +92,12 @@ def list_transactions(
         "total": total,
         "page": page,
         "page_size": page_size,
+        "totals": {
+            "debits": round(sum(-float(t.amount) for t in rows if t.amount <= 0), 2),
+            "credits": round(sum(float(t.amount) for t in rows if t.amount > 0), 2),
+            "debit_count": sum(1 for t in rows if t.amount <= 0),
+            "credit_count": sum(1 for t in rows if t.amount > 0),
+        },
         "items": [ser.txn(t) for t in items],
         "sources": {str(k): v for k, v in sources.items()},
     }

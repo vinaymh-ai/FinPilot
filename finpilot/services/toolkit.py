@@ -415,7 +415,9 @@ class FinanceToolkit:
                         ids = possible.setdefault(fragment.strip(), [])
                         if t.id not in ids:
                             ids.append(t.id)
-        rows = sorted(rows, key=lambda t: (t.date, t.time or dt.time(), t.id), reverse=True)[: min(limit, 50)]
+        rows = sorted(rows, key=lambda t: (t.date, t.time or dt.time(), t.id), reverse=True)[
+            : min(limit, 500)
+        ]
         return {
             "count": total_count,
             "returned_count": len(rows),
@@ -610,6 +612,22 @@ class FinanceToolkit:
             }
         return {"estimate": round(est, -2), "basis": basis, "past_trips": [round(x, 2) for x in trips]}
 
+    def query_ledger(self, question: str) -> dict[str, Any]:
+        """Deterministic SQL analyst over this user's ledger (the chat agent adds LLM text-to-SQL)."""
+        from finpilot.agents.analyst import SQLAnalystAgent
+
+        if not isinstance(question, str) or not question.strip():
+            raise ValueError("question must be a non-empty string")
+        out = SQLAnalystAgent(use_llm=False, use_jev=False).answer(self, question[:500], prefer_llm=False)
+        if not out["trace"]:
+            return {"error": "The ledger analyst could not interpret this question", "question": question}
+        return {
+            "answer": out["answer"],
+            "queries": [t["args"] | {"result": t["result"]} for t in out["trace"]],
+            "artifacts": out["artifacts"],
+            "mode": out["analyst"].get("mode"),
+        }
+
     # ------------------------------------------------------------------ dispatch
     def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         fn = getattr(self, name, None)
@@ -695,6 +713,20 @@ def _tool(
 
 
 TOOL_SPECS: list[dict[str, Any]] = [
+    _tool(
+        "query_ledger",
+        "SQL Analyst over every transaction (debit/credit, channel, category, merchant, date, time). Use for ANY "
+        "factual transaction question other tools cannot answer exactly: counts, lists of transactions, averages, "
+        "largest/smallest/first/last, breakdowns by month/category/merchant/weekday/channel, credits and income, "
+        "period comparisons, weekend/late-night filters, amount thresholds, UPI vs card.",
+        {
+            "question": {
+                "type": "string",
+                "description": "Self-contained question keeping the user's exact merchant names and period words",
+            }
+        },
+        ["question"],
+    ),
     _tool(
         "rank_spending",
         "Rank largest individual expenses, categories or merchants. Use transaction for 'biggest expense', category for 'biggest category', merchant for 'where do I spend most'. Transfers/investments excluded.",

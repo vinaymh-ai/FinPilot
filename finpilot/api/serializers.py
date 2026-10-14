@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from finpilot.domain.normalize import payment_provider
+from finpilot.domain.normalize import CHANNELS, detect_channel, direction_of, payment_provider
 from finpilot.domain.recurring import monthly_equivalent
 from finpilot.domain.taxonomy import label, transaction_kind
 from finpilot.models import (
@@ -27,6 +27,9 @@ def txn(t: Transaction) -> dict[str, Any]:
         "description": t.description,
         "merchant": t.merchant,
         "amount": float(t.amount),
+        "direction": t.direction or direction_of(float(t.amount)),
+        "channel": t.channel or detect_channel(t.description),
+        "channel_label": CHANNELS.get(t.channel or detect_channel(t.description), "Other"),
         "category": t.category,
         "category_label": label(t.category),
         "category_source": t.category_source,

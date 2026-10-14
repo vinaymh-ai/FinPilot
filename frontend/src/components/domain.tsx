@@ -42,6 +42,8 @@ const SOURCE_TONE: Record<string, Tone> = {
   import: "neutral",
   fallback: "red",
   review: "amber",
+  p2p: "amber",
+  consistency: "blue",
 };
 export function SourceBadge({ source, confidence, reason }: { source: string | null; confidence?: number | null; reason?: string | null }) {
   if (!source) return <Badge>pending</Badge>;

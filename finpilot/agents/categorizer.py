@@ -5,12 +5,16 @@ Cascade (cheapest, most certain first):
     2. history  — how this merchant was categorised before (by Jev, the LLM or the user)
     3. rule     — curated merchant lexicon (≈200 Indian + global brands)
     4. keyword  — generic token evidence ("MEDICALS", "PETROL", "SALON"), amount- and sign-aware
-    5. llm      — semantic reasoning over unresolved narrations, amounts, dates and context
-    6. jev      — category + payee type + service family for remaining uncertainty; an optional
-                  LLM retry follows deferred decisions
-    7. pattern  — recurring cadence supports a subscription only when the description also
+    5. p2p      — a UPI payment to/from an individual is a person-to-person transfer; the purpose
+                  is not stated, so it is labelled with review-level confidence
+    6. llm      — semantic reasoning over *uncertain* merchant groups only (one decision per
+                  merchant + direction), using brand knowledge, narration, amount and channel
+    7. jev      — optional legacy decision model for remaining uncertainty
+    8. pattern  — recurring cadence supports a subscription only when the description also
                   identifies a subscription or membership; cadence alone cannot prove purpose
+    9. consistency — a merchant's uncertain rows inherit the category its confident rows agree on
 The output therefore genuinely depends on each transaction's text, amount, sign and history.
+Every result carries a source, a confidence and a human-readable reason (the audit trail).
 """
 
 from __future__ import annotations
@@ -27,12 +31,22 @@ from finpilot.decisions.jev import ChoiceAnswer, Evaluation
 from finpilot.decisions.policy import DecisionRecord, log_decisions, order_debias_many, record
 from finpilot.decisions.spec import merchant_questions, merchant_state
 from finpilot.domain.lexicon import keyword_scores, match_merchant
-from finpilot.domain.normalize import is_card_repayment, looks_like_person, merchant_key, payment_provider
+from finpilot.domain.normalize import (
+    detect_channel,
+    is_card_repayment,
+    looks_like_person,
+    merchant_key,
+    payment_provider,
+)
 from finpilot.domain.recurring import TxnLite, detect_recurring
 from finpilot.domain.taxonomy import BY_ID, CATEGORIES, CATEGORY_IDS
 
 CREDIT_CATEGORIES = {"income", "transfers", "investments"}
 LLM_THRESHOLD = 0.7
+P2P_CONFIDENCE = 0.6
+# Results the LLM does not re-check: the user's own corrections and imported labels, and earlier
+# model decisions remembered for the same merchant.
+SETTLED_SOURCES = {"memory", "history", "user", "import"}
 
 
 @dataclass
@@ -109,29 +123,38 @@ class MerchantDecision:
     accepted: bool
 
 
-SYSTEM_PROMPT = """You are the Categorizer agent of FinPilot, a personal-finance co-pilot (default market: India, INR).
-You receive full bank narrations and fallible rule suggestions. Independently reason about each transaction.
-Assign each one exactly ONE category id from this taxonomy:
+SYSTEM_PROMPT = """You are the Categorizer agent of FinPilot, an expert in Indian retail-banking narrations
+(UPI, POS/card, NEFT/IMPS/RTGS, NACH/ECS auto-debits, ATM, cheque) and in Indian and global merchant brands.
+Each input group is ONE merchant seen from one direction: its cleaned name, up to 6 raw narrations with signed
+amounts (negative = debit, money out; positive = credit, money in), dates, the payment channel, any payment
+intermediary, and a fallible rule-based guess with its reason. Assign exactly ONE category id per group:
 {taxonomy}
 
-Guidelines:
-- Use world knowledge of brands and Indian retail (e.g. "TRUFFLES" is a Bengaluru restaurant chain, "GREEN TRENDS" is a salon chain, "CHUMBAK" is a lifestyle store).
-- In India "HOTEL <name>" with a small amount is usually a restaurant (dining); with a large amount it is lodging (travel).
-- A name alone does not prove a transfer: individuals can be landlords, shops or service providers.
-- Separate the payment channel (UPI, bank, payment platform) from the economic purpose.
-- First identify the payee's actual business and products, then infer this payment's purpose.
-  Words like Club, Tech and Services inside a company name do not prove membership fees or purchases.
-  Do not invent a fee/product from the payee's name. A bill-payment business's ordinary debit may be a
-  repayment inference without literal card wording; contrary rent/order/membership evidence wins.
-- Infer purpose using the complete narration, the payee's known business/products, direction,
-  amount and related transactions. A bill-paying platform can indicate a credit-card repayment
-  even when the bank's truncated narration omits the words "credit card". Explain the evidence
-  and distinguish an inference from an explicit statement. Prefer a specific purchase/rent
-  purpose when the narration supplies one; payment platforms can offer multiple services.
-- Never infer a subscription from cadence alone.
-- A positive amount alone does not prove income: it can be a refund or own-account transfer.
-- If you genuinely cannot tell, answer "other" with a low confidence.
-Respond with JSON only: {{"results": [{{"id": <id>, "category": "<category id>", "confidence": <0..1>, "merchant": "<clean merchant name>", "reason": "<max 12 words>"}}]}}"""
+Reason in this order (do not output the steps):
+1. Payee: identify the actual business from the narration and your brand knowledge (e.g. "MEGHANA FOODS" is a
+   biryani restaurant, "BBLUNT" a salon chain, "CROSSWORD" a bookstore, "IMAGICA" an amusement park,
+   "SANGEETHA MOBILES" a phone retailer, "AMUL" a dairy brand, "RAPIDO" a bike-taxi app). If the payee is
+   an individual's name, it is a person.
+2. Purpose of THIS payment: explicit words (RENT, EMI, SIP, SALARY, REFUND, ORDER, BILL, FEES, PREMIUM) beat
+   brand defaults. UPI, Razorpay, PayU, Cashfree, CRED, Paytm and PhonePe are payment channels, not purposes.
+3. Direction: a credit from a shop is a refund (use the shop's category); from an employer or client it is
+   income; from an individual it is a transfer. A positive amount alone does not prove income.
+4. Amount sanity: "HOTEL <name>" under 2,500 is usually a restaurant meal (dining); larger is lodging (travel).
+
+Category rules:
+- transfers: money to/from individuals (P2P) or own accounts. For a person with no stated purpose use
+  transfers with confidence 0.6, because the person could be a landlord or service provider.
+- subscriptions: recurring digital services and memberships only — never inferred from cadence alone.
+- credit_card_payment: explicit card-bill evidence, or an ordinary payment to a bill-payment platform
+  (say it is an inference). Card bills do not reveal the original purchases.
+- other: only when the business and purpose genuinely cannot be identified.
+
+Confidence calibration: 0.95 explicit in the narration or a famous single-purpose brand; 0.85 strong brand or
+keyword knowledge; 0.7 plausible inference; below 0.6 is a guess — answer "other" instead of guessing.
+Respond with JSON only: {{"results": [{{"id": <id>, "category": "<category id>", "confidence": <0..1>,
+"merchant": "<clean merchant name>", "payee_type": "business|person|institution|own_account",
+"reason": "<max 15 words: the narration words or brand knowledge that decided it>"}}]}}
+Return one result for every input id."""
 
 
 def _taxonomy_text() -> str:
@@ -246,13 +269,20 @@ class CategorizerAgent(BaseAgent):
 
         scores = keyword_scores(norm)
         if looks_like_person(item.description) and max(scores.values(), default=0.0) < 0.5:
+            # Person-to-person: the transaction kind is a transfer, but the purpose is unknown,
+            # so it stays below the review threshold until the user confirms it.
             return CatResult(
                 item.key,
                 merchant,
-                "other",
-                "review",
-                0.35,
-                "Payee looks like a person, but a name alone does not establish the payment purpose",
+                "transfers",
+                "p2p",
+                P2P_CONFIDENCE,
+                (
+                    "Money received from an individual over UPI (person-to-person)"
+                    if credit
+                    else "Payment to an individual over UPI (person-to-person); the purpose isn't stated "
+                    "— confirm if it was rent, a service or a purchase"
+                ),
             )
 
         tokens = set(norm.split())
@@ -416,6 +446,11 @@ class CategorizerAgent(BaseAgent):
         return deferred
 
     # ------------------------------------------------------------------ LLM stage
+    @staticmethod
+    def _settled(result: CatResult) -> bool:
+        """User decisions and earlier model decisions for the same merchant are not re-asked."""
+        return result.source in SETTLED_SOURCES
+
     def _llm_refine(
         self,
         items: list[CatItem],
@@ -423,14 +458,16 @@ class CategorizerAgent(BaseAgent):
         stats: CategorizerStats,
         only: set[tuple[str, bool]] | None = None,
     ) -> None:
-        groups_by_narration: dict[tuple[str, bool], list[CatItem]] = defaultdict(list)
+        """One reasoning decision per uncertain merchant + direction (pay per merchant, not per row)."""
+        groups_by_key: dict[tuple[str, bool], list[CatItem]] = defaultdict(list)
         for item in items:
-            if results[item.key].source == "memory":
+            result = results[item.key]
+            if self._settled(result):
                 continue
-            key = (item.description, item.amount > 0)
-            if only is None or self._group_key(item, results[item.key]) in only:
-                groups_by_narration[key].append(item)
-        groups = list(groups_by_narration.items())
+            key = self._group_key(item, result)
+            if only is None or key in only:
+                groups_by_key[key].append(item)
+        groups = list(groups_by_key.items())
         if not groups or not self.llm_available:
             return
         stats.llm_merchants += len(groups)
@@ -443,20 +480,22 @@ class CategorizerAgent(BaseAgent):
                         "id": idx,
                         "merchant": results[its[0].key].merchant,
                         "payment_provider": payment_provider(its[0].description),
+                        "channel": detect_channel(its[0].description),
                         "transactions": [
                             {"description": i.description, "amount": i.amount, "date": i.date}
-                            for i in its[:8]
+                            for i in its[:6]
                         ],
                         "direction": "credit" if credit else "debit",
                         "typical_amount": round(sorted(abs(i.amount) for i in its)[len(its) // 2], 2),
                         "count": len(its),
                         "rule_guess": results[its[0].key].category,
+                        "rule_confidence": results[its[0].key].confidence,
                         "rule_reason": results[its[0].key].reason,
                     }
                     for idx, ((_m, credit), its) in enumerate(batch, start=start)
                 ],
             }
-            data, label, err = self.safe_ask_json(payload, max_tokens=2500)
+            data, label, err = self.safe_ask_json(payload, max_tokens=2500, temperature=0)
             stats.llm_batches += 1
             if data is None:
                 stats.llm_error = err
@@ -480,7 +519,7 @@ class CategorizerAgent(BaseAgent):
                 ):
                     continue
                 (_m, _credit), its = groups[idx]
-                reason = str(row.get("reason") or "LLM classification")[:200]
+                reason = str(row.get("reason") or row.get("evidence") or "LLM classification")[:200]
                 if conf < LLM_THRESHOLD or cat == "other":
                     reason = f"Uncertain {cat}: {reason}"
                     cat, conf = "other", min(conf, LLM_THRESHOLD - 0.01)
@@ -488,10 +527,82 @@ class CategorizerAgent(BaseAgent):
                     prev = results[it.key]
                     if is_card_repayment(it.description) and cat != "credit_card_payment":
                         continue  # explicit repayment evidence outranks a model's unsupported inference
-                    if conf >= LLM_THRESHOLD or prev.confidence < LLM_THRESHOLD:
+                    if cat == "other" and prev.category != "other":
+                        # An unsure model must not erase specific evidence (a keyword, a P2P payee).
+                        results[it.key] = CatResult(
+                            it.key,
+                            prev.merchant,
+                            prev.category,
+                            prev.source,
+                            prev.confidence,
+                            f"{prev.reason} (model review could not confirm)",
+                        )
+                        continue
+                    if cat == prev.category:
+                        # Independent agreement between rules and the model raises confidence.
+                        results[it.key] = CatResult(
+                            it.key,
+                            prev.merchant,
+                            cat,
+                            "llm",
+                            round(min(max(conf, prev.confidence) + 0.03, 0.97), 2),
+                            f"LLM agrees with rules: {reason}",
+                        )
+                    elif prev.source == "rule" and prev.confidence >= 0.9 and conf < 0.9:
+                        # A curated lexicon / explicit-evidence rule yields only to a confident model.
+                        results[it.key] = CatResult(
+                            it.key,
+                            prev.merchant,
+                            prev.category,
+                            prev.source,
+                            prev.confidence,
+                            f"{prev.reason} (model suggested {BY_ID[cat].label} at {conf:.2f}; rule kept)",
+                        )
+                    elif conf >= LLM_THRESHOLD or prev.confidence < LLM_THRESHOLD:
                         results[it.key] = CatResult(
                             it.key, prev.merchant, cat, "llm", round(min(conf, 0.95), 2), f"LLM: {reason}"
                         )
+
+    # ------------------------------------------------------------------ consistency stage
+    @classmethod
+    def consistency_refine(cls, results: dict[int, CatResult], items: list[CatItem]) -> int:
+        """Uncertain rows of a merchant inherit the category its confident rows agree on.
+
+        A merchant often appears in several narration styles (POS one day, UPI the next); when every
+        confident label for it, in the same direction, says the same thing, the stragglers follow.
+        Payment intermediaries are excluded (each payment can have a different purpose).
+        """
+        by_merchant: dict[tuple[str, bool], list[CatItem]] = defaultdict(list)
+        for it in items:
+            if payment_provider(it.description):
+                continue
+            by_merchant[cls._group_key(it, results[it.key])].append(it)
+        changed = 0
+        for (_merchant, _credit), its in by_merchant.items():
+            confident = [
+                results[i.key]
+                for i in its
+                if results[i.key].confidence >= 0.8 and results[i.key].category != "other"
+            ]
+            labels = {r.category for r in confident}
+            if len(labels) != 1:
+                continue
+            (category,) = labels
+            for it in its:
+                r = results[it.key]
+                if r.category == category or r.confidence >= 0.8 or r.source in SETTLED_SOURCES:
+                    continue
+                results[it.key] = CatResult(
+                    it.key,
+                    r.merchant,
+                    category,
+                    "consistency",
+                    0.8,
+                    f"Same merchant as {len(confident)} confidently labelled transaction(s) "
+                    f"({BY_ID[category].label})",
+                )
+                changed += 1
+        return changed
 
     # ------------------------------------------------------------------ pattern stage
     @staticmethod
@@ -567,6 +678,7 @@ class CategorizerAgent(BaseAgent):
                 self._llm_refine(items, results, stats, only=deferred)
         if use_patterns:
             self.pattern_refine(results, items)
+        self.consistency_refine(results, items)
         for r in results.values():
             stats.by_source[r.source] += 1
         return [results[it.key] for it in items], stats

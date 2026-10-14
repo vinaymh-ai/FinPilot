@@ -63,6 +63,7 @@ def init_db() -> None:
     added = _add_missing_columns(engine)
     _ensure_indexes(engine)
     _backfill(engine, added)
+    _backfill_transaction_metadata(engine)
 
 
 def _add_missing_columns(engine: Engine) -> list[str]:
@@ -121,6 +122,32 @@ def _backfill(engine: Engine, added: list[str]) -> None:
                 conn.exec_driver_sql(sql)
     except Exception:  # noqa: BLE001 - best effort; never block startup
         log.warning("backfill of user ids failed", exc_info=True)
+
+
+def _backfill_transaction_metadata(engine: Engine) -> None:
+    """Derive debit/credit direction and payment channel for rows imported by older versions."""
+    from sqlalchemy import or_, select, update
+
+    from finpilot.domain.normalize import detect_channel, direction_of
+    from finpilot.models import Transaction
+
+    try:
+        with engine.begin() as conn:
+            rows = conn.execute(
+                select(Transaction.id, Transaction.amount, Transaction.description).where(
+                    or_(Transaction.direction.is_(None), Transaction.channel.is_(None))
+                )
+            ).all()
+            for tid, amount, description in rows:
+                conn.execute(
+                    update(Transaction)
+                    .where(Transaction.id == tid)
+                    .values(direction=direction_of(float(amount)), channel=detect_channel(description or ""))
+                )
+        if rows:
+            log.info("derived direction and channel for %s existing transactions", len(rows))
+    except Exception:  # noqa: BLE001 - best effort; never block startup
+        log.warning("transaction metadata backfill failed", exc_info=True)
 
 
 def new_session() -> Session:
