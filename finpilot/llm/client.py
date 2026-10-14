@@ -386,29 +386,63 @@ class LLMRouter:
         )
 
     # ----------------------------------------------------------------------------- embeddings
+    EMBED_COOLDOWN_S = 300.0  # after a failure, skip dense retrieval for this long (chat stays fast)
+    EMBED_BATCH_SIZE = 64  # inputs per request: Gemini, Cohere and Workers AI reject batches over ~100
+
+    def embedding_target(self) -> tuple[ProviderSpec, str] | None:
+        """(provider, model) for embeddings: EMBEDDING_PROVIDER if set, else the chat provider."""
+        model = self.settings.embedding_model
+        if not model or not self.enabled:
+            return None
+        name = self.settings.embedding_provider
+        if name:
+            spec = PROVIDERS.get(name)
+            return (spec, model) if spec is not None and is_configured(spec, self.settings) else None
+        targets = self.targets("chat")
+        return (targets[0][0], model) if targets else None
+
     def embeddings_available(self) -> bool:
-        return self.enabled and bool(self.settings.embedding_model) and bool(self.targets("chat"))
+        if time.monotonic() < getattr(self, "_embed_down_until", 0.0):
+            return False
+        return self.embedding_target() is not None
+
+    def describe_embeddings(self) -> str | None:
+        target = self.embedding_target()
+        return f"{target[0].name}:{target[1]}" if target else None
 
     def embed(self, texts: list[str], *, agent: str = "retriever") -> list[list[float]]:
-        """Dense vectors for `texts` from the configured embedding model (cached per text)."""
-        model = self.settings.embedding_model
-        targets = self.targets("chat") if self.enabled else []
-        if not model or not targets or not texts:
+        """Dense vectors for `texts` from the configured embedding model (cached per text).
+
+        A failure (or a slow endpoint) opens a short circuit breaker so later requests skip dense
+        retrieval instead of waiting on it; retrieval then runs on its local hybrid index alone.
+        """
+        target = self.embedding_target()
+        if target is None or not texts:
             raise LLMUnavailableError("no embedding model configured")
-        spec = targets[0][0]
+        spec, model = target
         keys = [hashlib.sha256(f"emb|{spec.name}|{model}|{t}".encode()).hexdigest() for t in texts]
-        out: list[list[float] | None] = []
-        for k in keys:
-            hit = self._cache_get(k) if self.settings.llm_cache_enabled else None
-            out.append(json.loads(hit) if hit else None)
+        cached = self._cache_get_many(keys) if self.settings.llm_cache_enabled else {}
+        out: list[list[float] | None] = [json.loads(cached[k]) if k in cached else None for k in keys]
         missing = [i for i, v in enumerate(out) if v is None]
         if missing:
+            client = self._client(spec)
+            if hasattr(client, "with_options"):  # a short timeout and no retries: embeddings are optional
+                client = client.with_options(timeout=self.settings.embedding_timeout_s, max_retries=0)
+        for start in range(0, len(missing), self.EMBED_BATCH_SIZE):
+            batch = missing[start : start + self.EMBED_BATCH_SIZE]
             started = time.perf_counter()
             try:
-                resp = self._client(spec).embeddings.create(model=model, input=[texts[i] for i in missing])
+                resp = client.embeddings.create(model=model, input=[texts[i] for i in batch])
+                vectors = [d.embedding for d in sorted(resp.data, key=lambda d: d.index)]
+                if len(vectors) != len(batch):
+                    raise ValueError(f"{len(vectors)} vectors for {len(batch)} inputs")
             except Exception as exc:  # noqa: BLE001 - surfaced as LLMError, callers fall back
+                self._embed_down_until = time.monotonic() + self.EMBED_COOLDOWN_S
+                log.warning(
+                    "embeddings unavailable (%s:%s), using local retrieval: %s", spec.name, model, exc
+                )
                 raise LLMError(f"embedding call failed: {exc}") from exc
-            vectors = [d.embedding for d in sorted(resp.data, key=lambda d: d.index)]
+            self._embed_down_until = 0.0
             tokens = getattr(getattr(resp, "usage", None), "prompt_tokens", 0) or 0
             self._record(
                 agent,
@@ -421,7 +455,7 @@ class LLMRouter:
                 ),
                 success=True,
             )
-            for i, vec in zip(missing, vectors, strict=True):
+            for i, vec in zip(batch, vectors, strict=True):  # cached per batch: a later failure resumes here
                 out[i] = vec
                 if self.settings.llm_cache_enabled:
                     self._cache_put(keys[i], model, json.dumps(vec))
@@ -449,6 +483,28 @@ class LLMRouter:
                 return row.response if row else None
         except Exception:  # noqa: BLE001
             return None
+
+    def _cache_get_many(self, keys: list[str]) -> dict[str, str]:
+        from sqlalchemy import select
+
+        from finpilot.db import session_scope
+        from finpilot.models import LLMCache
+
+        out: dict[str, str] = {}
+        try:
+            with session_scope() as s:
+                for i in range(0, len(keys), 500):
+                    chunk = keys[i : i + 500]
+                    out.update(
+                        dict(
+                            s.execute(
+                                select(LLMCache.key, LLMCache.response).where(LLMCache.key.in_(chunk))
+                            ).all()
+                        )
+                    )
+        except Exception:  # noqa: BLE001
+            return {}
+        return out
 
     def _cache_put(self, key: str, model: str, response: str) -> None:
         from finpilot.db import session_scope

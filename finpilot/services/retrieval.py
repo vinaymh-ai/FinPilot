@@ -56,6 +56,8 @@ STOPWORDS = _words(
     AMOUNT AMOUNTS RS INR RUPEES MONTH MONTHS MONTHLY WEEK WEEKS YEAR YEARS DAY DAYS TODAY YESTERDAY LAST THIS
     NEXT PAST RECENT LATEST FIRST TIME TIMES SINCE UNTIL TILL BETWEEN DURING AVERAGE AVG MEAN COUNT NUMBER
     BIGGEST LARGEST HIGHEST SMALLEST LOWEST TOP MOST LEAST RELATED REGARDING ON MADE MAKE DONE ALSO JUST ONLY
+    RELATE RELATES RELATING RELATION INVOLVE INVOLVES INVOLVING INVOLVED ASSOCIATED CONCERNING CONNECTED LINKED
+    PLS PLZ KINDLY
     OFTEN USUALLY TYPICAL TYPICALLY BREAKDOWN BREAK DOWN TREND COMPARE VS VERSUS MORE LESS UP DOWN AGAIN
     DEBIT DEBITS CREDIT CREDITS RECEIVED RECEIVE SENT SEND WENT GO GOT INCOME EARN EARNED EXPENSE EXPENSES
     """
@@ -304,9 +306,10 @@ class LedgerRetriever:
 
     @cached_property
     def semantic(self):
+        from finpilot.llm.client import get_router
         from finpilot.services.semantic import SemanticIndex
 
-        router = getattr(self.kit, "router", None)
+        router = getattr(self.kit, "router", None) or get_router()
         return SemanticIndex(self.merchants, self._descs, router=router)
 
     @cached_property

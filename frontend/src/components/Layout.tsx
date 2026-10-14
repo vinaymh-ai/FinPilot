@@ -76,12 +76,16 @@ function AccountPanel({ compact = false }: { compact?: boolean }) {
       </div>
       {!compact && (
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5 text-[13px] font-medium">
-            <span className="min-w-0 truncate">{user.name}</span>
+          <div className="truncate text-[13px] font-medium" title={user.name}>
+            {user.name}
+          </div>
+          <div className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-muted">
             {user.is_demo && <Badge tone="amber" className="shrink-0">demo</Badge>}
             {user.is_admin && !user.is_demo && <Badge tone="violet" className="shrink-0">admin</Badge>}
+            <span className="min-w-0 truncate" title={user.is_demo ? undefined : (user.email ?? undefined)}>
+              {user.is_demo ? "Temporary sandbox" : user.email}
+            </span>
           </div>
-          <div className="truncate text-[11.5px] text-muted">{user.is_demo ? "Temporary sandbox" : user.email}</div>
         </div>
       )}
       <Button
@@ -130,7 +134,9 @@ export default function Layout({ children }: { children: ReactNode }) {
   const { dark, toggle } = useTheme();
   const [open, setOpen] = useState(false);
   const loc = useLocation();
-  const llmAgents = (meta?.agents ?? []).filter((a) => a.model !== "rules" && a.model !== "langgraph" && a.model.includes(":"));
+  const llmAgents = (meta?.agents ?? []).filter(
+    (a) => a.model !== "rules" && a.model !== "langgraph" && a.model.includes(":") && !a.model.startsWith("hybrid"),
+  );
 
   const nav = (
     <nav className="flex flex-col gap-0.5">
@@ -172,38 +178,34 @@ export default function Layout({ children }: { children: ReactNode }) {
 
   return (
     <div className="glow flex min-h-full">
-      {/* desktop sidebar */}
-      <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col gap-6 border-r border-line bg-surface/60 p-4 backdrop-blur lg:flex">
-        {brand}
-        {nav}
-        <div className="mt-auto space-y-3">
-        <div className="space-y-2 rounded-2xl border border-line bg-surface-2/60 p-3 text-[12px] text-muted">
-          <div>
-            <div className="mb-0.5 flex items-center gap-1.5 font-medium text-ink">
-              <Scale className="size-3.5 text-cyan-500" /> Decisions
+      {/* desktop sidebar: the nav scrolls on short screens; the status and your account stay pinned */}
+      <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col gap-4 border-r border-line bg-surface/60 p-4 backdrop-blur lg:flex">
+        <div className="shrink-0">{brand}</div>
+        <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">{nav}</div>
+        <div className="shrink-0 space-y-2">
+          <div className="space-y-1 rounded-2xl border border-line bg-surface-2/60 px-3 py-2 text-[11.5px] text-muted">
+            <div className="flex items-center gap-1.5" title="How closed-set decisions are made">
+              <Scale className="size-3.5 shrink-0 text-cyan-500" />
+              {meta?.decisions && meta.decisions !== "off" ? (
+                <span className="truncate">
+                  Decisions: Jev via <span className="text-ink">{meta.decisions.split(":")[0]}</span>
+                </span>
+              ) : (
+                <span className="truncate">Decisions: verified tools + LLM</span>
+              )}
             </div>
-            {meta?.decisions && meta.decisions !== "off" ? (
-              <span>
-                Jev via <span className="text-ink">{meta.decisions.split(":")[0]}</span> (System One)
-              </span>
-            ) : (
-              <span>LLM API reasoning with verified financial tools</span>
-            )}
-          </div>
-          <div>
-            <div className="mb-0.5 flex items-center gap-1.5 font-medium text-ink">
-              <Bot className="size-3.5 text-brand" /> Reasoning (LLM API)
+            <div className="flex items-center gap-1.5" title="Agents that reason through an LLM API">
+              <Bot className="size-3.5 shrink-0 text-brand" />
+              {llmAgents.length ? (
+                <span className="truncate">
+                  {llmAgents.length} agents via <span className="text-ink">{llmAgents[0].model.split(":")[0]}</span>
+                </span>
+              ) : (
+                <span className="truncate">Templates — add an LLM key</span>
+              )}
             </div>
-            {llmAgents.length ? (
-              <span>
-                {llmAgents.length} agents via <span className="text-ink">{llmAgents[0].model.split(":")[0]}</span>
-              </span>
-            ) : (
-              <span>Templates — add a Mesh key to enable LLM stages.</span>
-            )}
           </div>
-        </div>
-        <AccountPanel />
+          <AccountPanel />
         </div>
       </aside>
 
@@ -211,10 +213,10 @@ export default function Layout({ children }: { children: ReactNode }) {
       {open && (
         <div className="fixed inset-0 z-40 lg:hidden">
           <div className="absolute inset-0 bg-black/40" onClick={() => setOpen(false)} />
-          <aside className="absolute left-0 top-0 flex h-full w-72 flex-col gap-6 border-r border-line bg-surface p-4">
-            {brand}
-            {nav}
-            <div className="mt-auto">
+          <aside className="absolute left-0 top-0 flex h-full w-72 flex-col gap-4 border-r border-line bg-surface p-4">
+            <div className="shrink-0">{brand}</div>
+            <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">{nav}</div>
+            <div className="shrink-0">
               <AccountPanel />
             </div>
           </aside>

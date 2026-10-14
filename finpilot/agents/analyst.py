@@ -440,6 +440,15 @@ def parse_question(
         )
         measure = "count" if re.search(TXN_NOUNS, q) and not re.search(money_words, q) else "sum"
     inherited: list[str] = []
+    if (
+        measure is None
+        and base is not None
+        and re.search(
+            r"\b(list|show|display|give|see|view|itemi[sz]e|which ones?|which of|what are they|details?)\b", q
+        )
+    ):
+        measure = "list"  # "list please", "show them": the rows behind the previous answer
+        inherited.append("question")
     if measure is None and base is not None:
         measure, limit = base.measure, base.limit
         group_by = group_by or base.group_by
