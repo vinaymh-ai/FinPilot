@@ -105,6 +105,8 @@ data. Upload a statement on **Transactions** (CSV, Excel or PDF from any bank), 
 **Settings** (young professional · family with EMIs · freelancer with irregular income). Prefer no login on a
 personal machine? `AUTH_ENABLED=false` gives single-user mode. With `SEED_DEMO_DATA=true`, a new database is
 populated on first boot, and the first signup inherits the starter data. Subsequent accounts start empty.
+For a guided five-minute tour of every agent (what to click and which chat questions to ask), see
+[docs/DEMO.md](docs/DEMO.md).
 
 **Frontend dev mode:** `uvicorn finpilot.main:app --reload` + `cd frontend && npm run dev` → http://localhost:5173
 (Vite proxies `/api`). **Docker:** `docker compose up --build`. **Make targets:** `make setup | api | web | test | eval`.
